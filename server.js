@@ -38,7 +38,7 @@ const CONTAINER_FOTOS_RH = process.env.AZURE_CONTAINER_FOTOS || 'foto-empleados'
 const CONTAINER_DOCS_RH = process.env.AZURE_CONTAINER_DOCS || 'documentos-usuarios'
 
 // -------------------------------------------------------------
-// AUTO-VERIFICACIÓN DE COLUMNAS NUEVAS PARA KPIS, RH Y ALMACÉN EN SQL
+// AUTO-VERIFICACIÃ“N DE COLUMNAS NUEVAS PARA KPIS, RH Y ALMACÃ‰N EN SQL
 // -------------------------------------------------------------
 async function asegurarColumnasRH() {
   try {
@@ -72,16 +72,22 @@ async function asegurarColumnasRH() {
         IF COL_LENGTH('dbo.MovimientosAlmacen', 'FolioGrupo') IS NULL
           ALTER TABLE dbo.MovimientosAlmacen ADD FolioGrupo NVARCHAR(60) NULL;
       END
+
+      IF OBJECT_ID('dbo.Ingenieria', 'U') IS NOT NULL
+      BEGIN
+        IF COL_LENGTH('dbo.Ingenieria', 'BitacoraConteoJSON') IS NULL
+          ALTER TABLE dbo.Ingenieria ADD BitacoraConteoJSON NVARCHAR(MAX) NULL;
+      END
     `)
-    console.log('✅ Esquema de RH, KPIs y Almacén (UsuarioERP / FolioGrupo) verificado en Azure SQL')
+    console.log('âœ… Esquema de RH, KPIs y AlmacÃ©n (UsuarioERP / FolioGrupo) verificado en Azure SQL')
   } catch (e) {
-    console.warn('⚠️ Aviso al verificar columnas:', e.message)
+    console.warn('âš ï¸ Aviso al verificar columnas:', e.message)
   }
 }
 asegurarColumnasRH()
 
 // -------------------------------------------------------------
-// SUBIDA A BLOB STORAGE CON VIGENCIA DE 99 AÑOS (IGUAL QUE COMPRAS)
+// SUBIDA A BLOB STORAGE CON VIGENCIA DE 99 AÃ‘OS (IGUAL QUE COMPRAS)
 // -------------------------------------------------------------
 async function subirABlobYObtenerSAS(file, nombreContenedor = CONTAINER_COMPRAS) {
   if (!file) return null
@@ -178,6 +184,7 @@ function formatearUsuarioDB(row) {
       proyectos: permisosParseados.proyectos || { ver: false, editar: false },
       clientes: permisosParseados.clientes || { ver: false, editar: false },
       ingenieria: permisosParseados.ingenieria || { ver: false, editar: false },
+      kanban: permisosParseados.kanban || { ver: false, editar: false },
       almacen: permisosParseados.almacen || { ver: false, editar: false },
       rh: permisosParseados.rh || { ver: false, editar: false },
       chatbot: permisosParseados.chatbot || { ver: false, editar: false },
@@ -257,7 +264,7 @@ app.post('/api/ubicaciones', async (req, res) => {
       .input('Direccion', sql.NVarChar, direccion || null)
       .input('Ciudad', sql.NVarChar, ciudad || null)
       .query('INSERT INTO Ubicaciones (ClienteID, NombreUbicacion, Direccion, Ciudad) VALUES (@ClienteID, @NombreUbicacion, @Direccion, @Ciudad)')
-    res.json({ mensaje: 'Ubicación registrada correctamente' })
+    res.json({ mensaje: 'UbicaciÃ³n registrada correctamente' })
   } catch (e) { res.status(500).send(e.message) }
 })
 
@@ -454,7 +461,7 @@ app.put('/api/compras/cancelar/:id', async (req, res) => {
 })
 
 // -------------------------------------------------------------
-// 6. INGENIERÍA (Alta, Consulta, Edición y Avance)
+// 6. INGENIERÃA (Alta, Consulta, EdiciÃ³n y Avance)
 // -------------------------------------------------------------
 app.get('/api/ingenieria', async (req, res) => {
   try {
@@ -465,26 +472,54 @@ app.get('/api/ingenieria', async (req, res) => {
 })
 
 app.post('/api/ingenieria', uploadIngenieria, async (req, res) => {
-  const { nombre, proyecto, tipoNivel, padreID, cantidadRequerida } = req.body
+  const { nombre, proyecto, tipoNivel, padreID, cantidadRequerida, cantidadLista, bitacoraConteo } = req.body
 
   try {
     let urlGLB = req.files?.archivoGlb ? await subirABlobYObtenerSAS(req.files.archivoGlb[0], CONTAINER_COMPRAS) : null
     let urlPDF = req.files?.archivoPdf ? await subirABlobYObtenerSAS(req.files.archivoPdf[0], CONTAINER_COMPRAS) : null
 
     let pool = await sql.connect(config)
+    const cr = parseInt(cantidadRequerida, 10) || 1
+    const cl = parseInt(cantidadLista, 10) || 0
+
+    if (bitacoraConteo) {
+      try {
+        await pool.request()
+          .input('N', sql.NVarChar, nombre || '')
+          .input('P', sql.NVarChar, proyecto || '')
+          .input('TN', sql.VarChar, tipoNivel || 'Pieza')
+          .input('PID', padreID && padreID !== '' ? parseInt(padreID, 10) : null)
+          .input('CR', sql.Int, cr)
+          .input('CL', sql.Int, cl)
+          .input('GLB', urlGLB)
+          .input('PDF', urlPDF)
+          .input('BC', sql.NVarChar, typeof bitacoraConteo === 'string' ? bitacoraConteo : JSON.stringify(bitacoraConteo))
+          .query(`
+            INSERT INTO Ingenieria 
+              (Nombre, Proyecto, TipoNivel, PadreID, CantidadRequerida, CantidadLista, UrlGLB, UrlPDF, EstatusAvance, FechaCreacion, BitacoraConteoJSON) 
+            VALUES 
+              (@N, @P, @TN, @PID, @CR, @CL, @GLB, @PDF, 'Pendiente', GETDATE(), @BC)
+          `)
+        return res.json({ mensaje: 'Guardado correctamente' })
+      } catch (errBc) {
+        console.warn('Fallo al guardar con BitacoraConteoJSON, reintentando:', errBc.message)
+      }
+    }
+
     await pool.request()
       .input('N', sql.NVarChar, nombre || '')
       .input('P', sql.NVarChar, proyecto || '')
-      .input('TN', sql.VarChar, tipoNivel || 'Ensamble')
+      .input('TN', sql.VarChar, tipoNivel || 'Pieza')
       .input('PID', padreID && padreID !== '' ? parseInt(padreID, 10) : null)
-      .input('CR', sql.Int, parseInt(cantidadRequerida, 10) || 1)
+      .input('CR', sql.Int, cr)
+      .input('CL', sql.Int, cl)
       .input('GLB', urlGLB)
       .input('PDF', urlPDF)
       .query(`
         INSERT INTO Ingenieria 
-          (Nombre, Proyecto, TipoNivel, PadreID, CantidadRequerida, UrlGLB, UrlPDF, EstatusAvance, FechaCreacion) 
+          (Nombre, Proyecto, TipoNivel, PadreID, CantidadRequerida, CantidadLista, UrlGLB, UrlPDF, EstatusAvance, FechaCreacion) 
         VALUES 
-          (@N, @P, @TN, @PID, @CR, @GLB, @PDF, 'Pendiente', GETDATE())
+          (@N, @P, @TN, @PID, @CR, @CL, @GLB, @PDF, 'Pendiente', GETDATE())
       `)
     res.json({ mensaje: 'Guardado' })
   } catch (e) {
@@ -529,10 +564,31 @@ app.put('/api/ingenieria/:id', uploadIngenieria, async (req, res) => {
 
 app.put('/api/ingenieria/:id/avance', async (req, res) => {
   const { id } = req.params
-  const { cantidadLista, cantidadRequerida } = req.body
+  const { cantidadLista, cantidadRequerida, bitacoraConteo } = req.body
 
   try {
     let pool = await sql.connect(config)
+
+    if (bitacoraConteo !== undefined) {
+      try {
+        await pool.request()
+          .input('ID', sql.Int, parseInt(id, 10))
+          .input('CL', sql.Int, parseInt(cantidadLista, 10) || 0)
+          .input('CR', sql.Int, parseInt(cantidadRequerida, 10) || 1)
+          .input('BC', sql.NVarChar, typeof bitacoraConteo === 'string' ? bitacoraConteo : JSON.stringify(bitacoraConteo))
+          .query(`
+            UPDATE Ingenieria 
+            SET CantidadLista = @CL, 
+                CantidadRequerida = @CR,
+                BitacoraConteoJSON = @BC 
+            WHERE ID = @ID
+          `)
+        return res.json({ mensaje: 'Avance y bitácora de conteo actualizados correctamente' })
+      } catch (errBc) {
+        console.warn('BitacoraConteoJSON no disponible en SQL, actualizando sin bitácora:', errBc.message)
+      }
+    }
+
     await pool.request()
       .input('ID', sql.Int, parseInt(id, 10))
       .input('CL', sql.Int, parseInt(cantidadLista, 10) || 0)
@@ -550,7 +606,7 @@ app.put('/api/ingenieria/:id/avance', async (req, res) => {
 })
 
 // -------------------------------------------------------------
-// 7. ALMACÉN, INVENTARIO, SALIDAS, KITS EN GRUPO Y PRÉSTAMOS
+// 7. ALMACÃ‰N, INVENTARIO, SALIDAS, KITS EN GRUPO Y PRÃ‰STAMOS
 // -------------------------------------------------------------
 app.get('/api/inventario', async (req, res) => {
   try {
@@ -576,7 +632,7 @@ app.get('/api/inventario/movimientos', async (req, res) => {
 app.post('/api/inventario/ingresar', async (req, res) => {
   const { compraID, modo, inventarioIDExistente, nombreProducto, ubicacion3D, cantidad, notas, usuarioERP } = req.body
   const cantNum = parseInt(cantidad, 10) || 1
-  const operadorSesion = (usuarioERP || '').trim() || 'Operador Almacén'
+  const operadorSesion = (usuarioERP || '').trim() || 'Operador AlmacÃ©n'
 
   try {
     let pool = await sql.connect(config)
@@ -628,15 +684,15 @@ app.post('/api/inventario/ingresar', async (req, res) => {
 
         await tx.request()
           .input('ID', sql.Int, parseInt(compraID, 10))
-          .query("UPDATE Compras SET EstatusAlmacen = 'Recibido en Almacén' WHERE Numero = @ID")
+          .query("UPDATE Compras SET EstatusAlmacen = 'Recibido en AlmacÃ©n' WHERE Numero = @ID")
       }
 
       await tx.request()
         .input('IID', sql.Int, targetID)
-        .input('NP', sql.NVarChar, nombreFinal || 'Artículo')
+        .input('NP', sql.NVarChar, nombreFinal || 'ArtÃ­culo')
         .input('TM', sql.VarChar, compraID ? 'Recepcion Compra' : 'Entrada Manual')
         .input('Cant', sql.Int, cantNum)
-        .input('Not', sql.NVarChar, notas || (compraID ? `Ingreso desde Compra #${compraID}` : 'Alta / suma directa en almacén'))
+        .input('Not', sql.NVarChar, notas || (compraID ? `Ingreso desde Compra #${compraID}` : 'Alta / suma directa en almacÃ©n'))
         .input('UERP', sql.NVarChar, operadorSesion)
         .query(`
           IF OBJECT_ID('dbo.MovimientosAlmacen', 'U') IS NOT NULL
@@ -660,7 +716,7 @@ app.post('/api/inventario/ingresar', async (req, res) => {
 app.post('/api/inventario/salida', async (req, res) => {
   const { inventarioID, tipoMovimiento, cantidad, empleadoID, proyecto, notas, usuarioERP } = req.body
   const cantSalida = parseInt(cantidad, 10) || 1
-  const operadorSesion = (usuarioERP || '').trim() || 'Operador Almacén'
+  const operadorSesion = (usuarioERP || '').trim() || 'Operador AlmacÃ©n'
 
   try {
     let pool = await sql.connect(config)
@@ -673,7 +729,7 @@ app.post('/api/inventario/salida', async (req, res) => {
         .query('SELECT EmpleadoID, NombreCompleto, Activo FROM PersonalRH WHERE EmpleadoID = @EID')
 
       if (empRes.recordset.length === 0 || !empRes.recordset[0].Activo) {
-        throw new Error('El colaborador seleccionado no existe o está dado de baja en RH.')
+        throw new Error('El colaborador seleccionado no existe o estÃ¡ dado de baja en RH.')
       }
       const empleado = empRes.recordset[0]
 
@@ -682,7 +738,7 @@ app.post('/api/inventario/salida', async (req, res) => {
         .query('SELECT ID, NombreProducto, CantidadStock FROM InventarioAlmacen WHERE ID = @IID')
 
       if (invRes.recordset.length === 0) {
-        throw new Error('El artículo no existe en el inventario.')
+        throw new Error('El artÃ­culo no existe en el inventario.')
       }
       const item = invRes.recordset[0]
       if (item.CantidadStock < cantSalida) {
@@ -692,7 +748,7 @@ app.post('/api/inventario/salida', async (req, res) => {
       const nuevoStock = item.CantidadStock - cantSalida
       const esPrestamo = tipoMovimiento === 'Prestamo Herramienta'
       const nuevoEstadoItem = nuevoStock === 0
-        ? (esPrestamo ? 'En Préstamo' : 'Agotado')
+        ? (esPrestamo ? 'En PrÃ©stamo' : 'Agotado')
         : 'Almacenado'
 
       await tx.request()
@@ -726,7 +782,7 @@ app.post('/api/inventario/salida', async (req, res) => {
         `)
 
       await tx.commit()
-      res.json({ mensaje: esPrestamo ? 'Préstamo de herramienta registrado' : 'Salida de almacén registrada' })
+      res.json({ mensaje: esPrestamo ? 'PrÃ©stamo de herramienta registrado' : 'Salida de almacÃ©n registrada' })
     } catch (err) {
       await tx.rollback()
       return res.status(400).json({ error: err.message })
@@ -738,10 +794,10 @@ app.post('/api/inventario/salida', async (req, res) => {
 
 app.post('/api/inventario/salida-grupo', async (req, res) => {
   const { empleadoID, proyecto, sitioTrabajo, notasGenerales, usuarioERP, items } = req.body
-  const operadorSesion = (usuarioERP || '').trim() || 'Operador Almacén'
+  const operadorSesion = (usuarioERP || '').trim() || 'Operador AlmacÃ©n'
 
   if (!Array.isArray(items) || items.length === 0) {
-    return res.status(400).json({ error: 'Debes incluir al menos un artículo en el envío en grupo.' })
+    return res.status(400).json({ error: 'Debes incluir al menos un artÃ­culo en el envÃ­o en grupo.' })
   }
 
   try {
@@ -755,11 +811,11 @@ app.post('/api/inventario/salida-grupo', async (req, res) => {
         .query('SELECT EmpleadoID, NombreCompleto, Activo FROM PersonalRH WHERE EmpleadoID = @EID')
 
       if (empRes.recordset.length === 0 || !empRes.recordset[0].Activo) {
-        throw new Error('El colaborador responsable no existe o está dado de baja en RH.')
+        throw new Error('El colaborador responsable no existe o estÃ¡ dado de baja en RH.')
       }
       const empleado = empRes.recordset[0]
       const folioGrupo = `SITIO-${Date.now().toString().slice(-6)}`
-      const destinoFinal = [proyecto, sitioTrabajo].filter(Boolean).join(' · ') || 'Sitio Externo'
+      const destinoFinal = [proyecto, sitioTrabajo].filter(Boolean).join(' Â· ') || 'Sitio Externo'
 
       for (const partida of items) {
         const cantSalida = parseInt(partida.cantidad, 10) || 1
@@ -768,7 +824,7 @@ app.post('/api/inventario/salida-grupo', async (req, res) => {
           .query('SELECT ID, NombreProducto, CantidadStock FROM InventarioAlmacen WHERE ID = @IID')
 
         if (invRes.recordset.length === 0) {
-          throw new Error(`El artículo #${partida.inventarioID} no existe.`)
+          throw new Error(`El artÃ­culo #${partida.inventarioID} no existe.`)
         }
         const itemBD = invRes.recordset[0]
         if (itemBD.CantidadStock < cantSalida) {
@@ -778,7 +834,7 @@ app.post('/api/inventario/salida-grupo', async (req, res) => {
         const nuevoStock = itemBD.CantidadStock - cantSalida
         const esPrestamo = partida.tipoMovimiento === 'Prestamo Herramienta'
         const nuevoEstadoItem = nuevoStock === 0
-          ? (esPrestamo ? 'En Préstamo' : 'Agotado')
+          ? (esPrestamo ? 'En PrÃ©stamo' : 'Agotado')
           : 'Almacenado'
 
         await tx.request()
@@ -801,7 +857,7 @@ app.post('/api/inventario/salida-grupo', async (req, res) => {
           .input('EID', sql.Int, empleado.EmpleadoID)
           .input('NEmp', sql.NVarChar, empleado.NombreCompleto)
           .input('Proy', sql.NVarChar, destinoFinal)
-          .input('Not', sql.NVarChar, notasGenerales || `Envío en grupo ${folioGrupo}`)
+          .input('Not', sql.NVarChar, notasGenerales || `EnvÃ­o en grupo ${folioGrupo}`)
           .input('EstP', sql.VarChar, esPrestamo ? 'Prestado' : null)
           .input('UERP', sql.NVarChar, operadorSesion)
           .input('FG', sql.NVarChar, folioGrupo)
@@ -839,7 +895,7 @@ app.put('/api/inventario/prestamo/:movimientoId/devolver', async (req, res) => {
         .query('SELECT * FROM MovimientosAlmacen WHERE MovimientoID = @MID')
 
       if (movRes.recordset.length === 0) {
-        throw new Error('Registro de préstamo no encontrado.')
+        throw new Error('Registro de prÃ©stamo no encontrado.')
       }
       const mov = movRes.recordset[0]
       if (mov.EstatusPrestamo === 'Devuelto') {
@@ -926,7 +982,7 @@ app.put('/api/inventario/prestamo-grupo/:folioGrupo/devolver', async (req, res) 
       }
 
       await tx.commit()
-      res.json({ mensaje: `Kit ${folioGrupo} reintegrado completo al almacén` })
+      res.json({ mensaje: `Kit ${folioGrupo} reintegrado completo al almacÃ©n` })
     } catch (err) {
       await tx.rollback()
       return res.status(400).json({ error: err.message })
@@ -961,7 +1017,7 @@ app.post('/api/login', async (req, res) => {
         .query('SELECT * FROM Usuarios WHERE LOWER(Email) = @Email')
 
       if (r.recordset.length === 0) {
-        return res.status(401).json({ error: 'Este correo corporativo no está registrado. Solicita acceso al Administrador.' })
+        return res.status(401).json({ error: 'Este correo corporativo no estÃ¡ registrado. Solicita acceso al Administrador.' })
       }
       return res.json(formatearUsuarioDB(r.recordset[0]))
     } else {
@@ -972,7 +1028,7 @@ app.post('/api/login', async (req, res) => {
         .query('SELECT * FROM Usuarios WHERE (LOWER(Usuario) = @U OR LOWER(Email) = @U) AND Password = @P')
 
       if (r.recordset.length === 0) {
-        return res.status(401).json({ error: 'Usuario o contraseña incorrectos' })
+        return res.status(401).json({ error: 'Usuario o contraseÃ±a incorrectos' })
       }
       return res.json(formatearUsuarioDB(r.recordset[0]))
     }
@@ -992,7 +1048,7 @@ app.post('/api/usuarios', async (req, res) => {
       .query('SELECT ID FROM Usuarios WHERE LOWER(Usuario) = @U')
 
     if (existe.recordset.length > 0) {
-      return res.status(400).json({ error: 'Ese nombre de usuario ya está registrado en la base de datos' })
+      return res.status(400).json({ error: 'Ese nombre de usuario ya estÃ¡ registrado en la base de datos' })
     }
 
     let r = await pool.request()
@@ -1027,7 +1083,7 @@ app.put('/api/usuarios/:id', async (req, res) => {
       .query('SELECT ID FROM Usuarios WHERE LOWER(Usuario) = @U AND ID <> @ID')
 
     if (duplicado.recordset.length > 0) {
-      return res.status(400).json({ error: 'Ese nombre de usuario ya está ocupado por otro perfil' })
+      return res.status(400).json({ error: 'Ese nombre de usuario ya estÃ¡ ocupado por otro perfil' })
     }
 
     let r = await pool.request()
@@ -1120,8 +1176,8 @@ app.post('/api/rh/personal', upload.single('foto'), async (req, res) => {
     if (urlSaaSFoto) {
       await pool.request()
         .input('EID', sql.Int, nuevoId)
-        .input('Titulo', sql.NVarChar, 'Fotografía de Perfil Inicial')
-        .input('Tipo', sql.NVarChar, 'Fotografía de Perfil')
+        .input('Titulo', sql.NVarChar, 'FotografÃ­a de Perfil Inicial')
+        .input('Tipo', sql.NVarChar, 'FotografÃ­a de Perfil')
         .input('URL', urlSaaSFoto)
         .input('NombreOrig', sql.NVarChar, req.file.originalname)
         .query(`
@@ -1181,8 +1237,8 @@ app.put('/api/rh/personal/:id', upload.single('foto'), async (req, res) => {
     if (req.file && nuevaUrlSaaS) {
       await pool.request()
         .input('EID', sql.Int, empIdNum)
-        .input('Titulo', sql.NVarChar, 'Actualización de Fotografía de Perfil')
-        .input('Tipo', sql.NVarChar, 'Fotografía de Perfil')
+        .input('Titulo', sql.NVarChar, 'ActualizaciÃ³n de FotografÃ­a de Perfil')
+        .input('Tipo', sql.NVarChar, 'FotografÃ­a de Perfil')
         .input('URL', nuevaUrlSaaS)
         .input('NombreOrig', sql.NVarChar, req.file.originalname)
         .query(`
@@ -1200,7 +1256,7 @@ app.put('/api/rh/personal/:id', upload.single('foto'), async (req, res) => {
 app.post('/api/rh/personal/:id/foto', upload.single('foto'), async (req, res) => {
   const { id } = req.params
   try {
-    if (!req.file) return res.status(400).json({ error: 'Selecciona una imagen válida' })
+    if (!req.file) return res.status(400).json({ error: 'Selecciona una imagen vÃ¡lida' })
     const urlSaaSFoto = await subirABlobYObtenerSAS(req.file, CONTAINER_FOTOS_RH)
     const empIdNum = parseInt(id, 10)
 
@@ -1212,8 +1268,8 @@ app.post('/api/rh/personal/:id/foto', upload.single('foto'), async (req, res) =>
 
     await pool.request()
       .input('EID', sql.Int, empIdNum)
-      .input('Titulo', sql.NVarChar, 'Fotografía de Empleado')
-      .input('Tipo', sql.NVarChar, 'Fotografía de Perfil')
+      .input('Titulo', sql.NVarChar, 'FotografÃ­a de Empleado')
+      .input('Tipo', sql.NVarChar, 'FotografÃ­a de Perfil')
       .input('URL', urlSaaSFoto)
       .input('NombreOrig', sql.NVarChar, req.file.originalname)
       .query(`
@@ -1221,7 +1277,7 @@ app.post('/api/rh/personal/:id/foto', upload.single('foto'), async (req, res) =>
         VALUES (@EID, @Titulo, @Tipo, CAST(GETDATE() AS DATE), @URL, @URL, @NombreOrig, 1)
       `)
 
-    res.json({ fotoUrl: urlSaaSFoto, URL_SaaS: urlSaaSFoto, mensaje: 'Fotografía actualizada' })
+    res.json({ fotoUrl: urlSaaSFoto, URL_SaaS: urlSaaSFoto, mensaje: 'FotografÃ­a actualizada' })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -1319,7 +1375,7 @@ app.put('/api/rh/documentos/:docId/vigencia', async (req, res) => {
       .input('DID', sql.Int, parseInt(docId, 10))
       .input('FVenc', sql.Date, fechaVencimiento || null)
       .query('UPDATE DocumentosEmpleadosRH SET FechaVencimiento = @FVenc WHERE DocumentoID = @DID')
-    res.json({ mensaje: 'Fecha de término actualizada' })
+    res.json({ mensaje: 'Fecha de tÃ©rmino actualizada' })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
@@ -1420,7 +1476,7 @@ app.post('/api/rh/kpis', async (req, res) => {
               FechaEvaluacion = GETDATE()
           WHERE EvaluacionID = @EvalID
         `)
-      return res.json({ mensaje: 'Evaluación KPI actualizada correctamente' })
+      return res.json({ mensaje: 'EvaluaciÃ³n KPI actualizada correctamente' })
     } else {
       await pool.request()
         .input('EID', sql.Int, parseInt(empleadoID, 10))
@@ -1441,7 +1497,7 @@ app.post('/api/rh/kpis', async (req, res) => {
           VALUES
             (@EID, @Mes, @Frec, @Area, @P1, @P2, @P3, @P4, @P5, @MC, @MA, @Com)
         `)
-      return res.json({ mensaje: 'Evaluación KPI registrada correctamente' })
+      return res.json({ mensaje: 'EvaluaciÃ³n KPI registrada correctamente' })
     }
   } catch (e) { res.status(500).json({ error: e.message }) }
 })
@@ -1496,11 +1552,11 @@ app.put('/api/rh/kpis/:id', async (req, res) => {
             FechaEvaluacion = GETDATE()
         WHERE EvaluacionID = @EvalID
       `)
-    res.json({ mensaje: 'Evaluación KPI corregida correctamente' })
+    res.json({ mensaje: 'EvaluaciÃ³n KPI corregida correctamente' })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
 })
 
 const PORT = process.env.PORT || 3000
-app.listen(PORT, () => { console.log(`🚀 Servidor en puerto ${PORT}`) })
+app.listen(PORT, () => { console.log(`ðŸš€ Servidor en puerto ${PORT}`) })

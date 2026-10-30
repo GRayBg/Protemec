@@ -6,7 +6,8 @@ const MODULOS_SISTEMA = [
   { id: 'compras', label: '💳 Compras y Finanzas', desc: 'Consulta de órdenes, costos, proveedores y facturas PDF' },
   { id: 'proyectos', label: '📁 Portafolio de Proyectos', desc: 'Catálogo de folios externos, clientes y estatus de obra' },
   { id: 'clientes', label: '🏢 Clientes y Directorio', desc: 'Empresas, plantas industriales y contactos' },
-  { id: 'ingenieria', label: '⚙️ Ingeniería y BOM 3D', desc: 'Visor CAD 3D, árbol BOM, Kanban y Calendario MS Project' },
+  { id: 'ingenieria', label: '⚙️ Ingeniería y BOM 3D', desc: 'Visor CAD 3D, ensambles y planos técnicos' },
+  { id: 'kanban', label: '📋 Tablero Kanban y Producción', desc: 'Control de avance por piezas/ensambles, conteo y vinculación con almacén' },
   { id: 'almacen', label: '📦 Almacén Digital 3D', desc: 'Entradas manuales, salidas, préstamos de herramienta y visor 3D' },
   { id: 'rh', label: '👥 Recursos Humanos y KPIs', desc: 'Expedientes de personal (activo/baja) y evaluación mensual de rendimiento' },
   { id: 'chatbot', label: '✨ Asistente IA', desc: 'Consultas rápidas mediante inteligencia artificial' },
@@ -147,11 +148,14 @@ export default function ModalConfiguracion({
       email: correoFinal,
       rol: nuevoRol,
       permisos: {
-        compras: { ver: true, editar: false },
+        gerencia: { ver: false, editar: false },
+        compras: { ver: nuevoRol === 'Compras' || nuevoRol === 'Dirección', editar: nuevoRol === 'Compras' },
         proyectos: { ver: true, editar: false },
         clientes: { ver: true, editar: false },
-        ingenieria: { ver: true, editar: true },
-        almacen: { ver: true, editar: true },
+        ingenieria: { ver: nuevoRol === 'Ingeniería' || nuevoRol === 'Dirección', editar: nuevoRol === 'Ingeniería' },
+        kanban: { ver: true, editar: nuevoRol !== 'Solo Lectura' },
+        almacen: { ver: true, editar: nuevoRol === 'Almacén' },
+        rh: { ver: false, editar: false },
         chatbot: { ver: true, editar: true },
         seguridad: { ver: false, editar: false }
       }
@@ -372,7 +376,8 @@ export default function ModalConfiguracion({
                     <div>
                       <label className="pro-label">Área / Rol</label>
                       <select value={nuevoRol} onChange={(e) => setNuevoRol(e.target.value)} className="pro-select">
-                        <option value="Ingeniería">Ingeniería</option>
+                        <option value="Producción / Taller">Producción / Taller (Solo Kanban)</option>
+                        <option value="Ingeniería">Ingeniería (CAD 3D + Kanban)</option>
                         <option value="Compras">Compras</option>
                         <option value="Almacén">Almacén</option>
                         <option value="Dirección">Dirección</option>

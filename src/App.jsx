@@ -5,6 +5,7 @@ import FormularioCompra from './components/FormularioCompra'
 import GestionClientes from './components/GestionClientes'
 import GestionProyectos from './components/GestionProyectos'
 import GestionIngenieria from './components/GestionIngenieria'
+import GestionKanban from './components/GestionKanban'
 import GestionAlmacenInventario from './components/GestionAlmacenInventario'
 import GestionAlmacen3D from './components/GestionAlmacen3D'
 import GestionRH from './components/GestionRH'
@@ -28,6 +29,7 @@ const PERFIL_MAESTRO_TOTAL = {
     proyectos: { ver: true, editar: true },
     clientes: { ver: true, editar: true },
     ingenieria: { ver: true, editar: true },
+    kanban: { ver: true, editar: true },
     almacen: { ver: true, editar: true },
     rh: { ver: true, editar: true },
     chatbot: { ver: true, editar: true },
@@ -65,6 +67,8 @@ function esBotonDeSoloConsulta(texto = '', clase = '') {
     'bajas',
     'explorador 3d',
     'control de avance',
+    'tablero kanban',
+    'salidas de almacén',
     'recepción y stock',
     'gemelo digital 3d',
     'gemelo 3d',
@@ -208,6 +212,7 @@ export default function App() {
   const [disenos, setDisenos] = useState([])
   const [personalRH, setPersonalRH] = useState([])
   const [evaluacionesKPI, setEvaluacionesKPI] = useState([])
+  const [movimientosAlmacen, setMovimientosAlmacen] = useState([])
   const [cargando, setCargando] = useState(true)
   const [sincronizando, setSincronizando] = useState(false)
   const [syncTrigger, setSyncTrigger] = useState(0)
@@ -252,6 +257,7 @@ export default function App() {
         'proyectos',
         'clientes',
         'ingenieria',
+        'kanban',
         'almacen',
         'rh',
         'chatbot'
@@ -287,12 +293,16 @@ export default function App() {
             urlStr.includes('/api/contactos')
           )
             moduloRequerido = 'clientes'
-          else if (urlStr.includes('/api/ingenieria')) moduloRequerido = 'ingenieria'
+          else if (urlStr.includes('/api/ingenieria')) moduloRequerido = moduloRef.current === 'kanban' ? 'kanban' : 'ingenieria'
           else if (urlStr.includes('/api/inventario')) moduloRequerido = 'almacen'
           else if (urlStr.includes('/api/rh')) moduloRequerido = 'rh'
           else if (urlStr.includes('/api/usuarios')) moduloRequerido = 'seguridad'
 
-          const tienePermisoEdicion = Boolean(user.permisos?.[moduloRequerido]?.editar === true)
+          const tienePermisoEdicion = Boolean(
+            user.permisos?.[moduloRequerido]?.editar === true ||
+            (moduloRequerido === 'ingenieria' && moduloRef.current === 'kanban' && user.permisos?.kanban?.editar === true) ||
+            (moduloRequerido === 'kanban' && user.permisos?.ingenieria?.editar === true)
+          )
           if (!tienePermisoEdicion) {
             mostrarToast('🔒 Modo Solo Lectura: No tienes permisos para guardar ni modificar datos', 'alerta')
             return new Response(
@@ -413,7 +423,8 @@ export default function App() {
       datosIngenieria,
       datosUsuarios,
       datosPersonalRH,
-      datosKpis
+      datosKpis,
+      datosMovimientos
     ] = await Promise.all([
       fetchSeguro('/api/datos'),
       fetchSeguro('/api/clientes'),
@@ -423,7 +434,8 @@ export default function App() {
       fetchSeguro('/api/ingenieria'),
       fetchSeguro('/api/usuarios'),
       fetchSeguro('/api/rh/personal'),
-      fetchSeguro('/api/rh/kpis')
+      fetchSeguro('/api/rh/kpis'),
+      fetchSeguro('/api/inventario/movimientos')
     ])
 
     if (Array.isArray(datosCompras)) setCompras(datosCompras)
@@ -434,6 +446,7 @@ export default function App() {
     if (Array.isArray(datosIngenieria)) setDisenos(datosIngenieria)
     if (Array.isArray(datosPersonalRH)) setPersonalRH(datosPersonalRH)
     if (Array.isArray(datosKpis)) setEvaluacionesKPI(datosKpis)
+    if (Array.isArray(datosMovimientos)) setMovimientosAlmacen(datosMovimientos)
 
     if (Array.isArray(datosUsuarios)) {
       const adminDB = datosUsuarios.find((u) => u.esMaestro)
@@ -513,6 +526,7 @@ export default function App() {
         'proyectos',
         'clientes',
         'ingenieria',
+        'kanban',
         'almacen',
         'rh',
         'chatbot'
@@ -558,6 +572,7 @@ export default function App() {
         'proyectos',
         'clientes',
         'ingenieria',
+        'kanban',
         'almacen',
         'rh',
         'chatbot'
@@ -857,6 +872,7 @@ export default function App() {
     { id: 'proyectos', label: 'Proyectos', icono: '📁', badge: proyectos.length },
     { id: 'clientes', label: 'Clientes y Directorio', icono: '🏢', badge: clientes.length },
     { id: 'ingenieria', label: 'Ingeniería y BOM 3D', icono: '⚙️', badge: disenos.length },
+    { id: 'kanban', label: 'Tablero Kanban', icono: '📋', badge: disenos.length },
     { id: 'almacen', label: 'Almacén Digital 3D', icono: '📦', badge: null },
     { id: 'rh', label: 'Recursos Humanos', icono: '👥', badge: personalRH.filter((p) => p.Activo).length },
     { id: 'chatbot', label: 'Asistente IA', icono: '✨', badge: 'AI' }
@@ -885,7 +901,11 @@ export default function App() {
     },
     ingenieria: {
       titulo: 'Ingeniería, CAD 3D y Estructura BOM',
-      subtitulo: 'Árbol jerárquico de ensambles, Kanban Drag & Drop y Calendario MS Project'
+      subtitulo: 'Árbol jerárquico de ensambles, modelos CAD 3D y especificaciones de diseño'
+    },
+    kanban: {
+      titulo: 'Tablero Kanban y Control de Avance',
+      subtitulo: 'Flujo de trabajo por proyecto, registro de avance y vinculación con salidas de almacén'
     },
     almacen: {
       titulo: 'Gemelo Digital de Almacén e Inventario',
@@ -1211,6 +1231,20 @@ export default function App() {
                   setPestanaIngenieria={setSubVistaIngenieria}
                   mostrarToast={mostrarToast}
                   puedeEditar={puedeEditarModuloActual}
+                />
+              )}
+
+              {/* 5.1. MÓDULO DE TABLERO KANBAN SEPARADO */}
+              {moduloActivo === 'kanban' && (
+                <GestionKanban
+                  disenos={disenos}
+                  proyectosUnicos={proyectosUnicos}
+                  movimientosAlmacen={movimientosAlmacen}
+                  API_URL={API_URL}
+                  recargarDatos={() => recargarDatos(true)}
+                  mostrarToast={mostrarToast}
+                  puedeEditar={puedeEditarModuloActual}
+                  usuarioActual={usuarioConPermisosActualizados}
                 />
               )}
 
