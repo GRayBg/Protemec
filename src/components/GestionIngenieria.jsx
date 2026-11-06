@@ -288,7 +288,13 @@ export default function GestionIngenieria({
                   <span style={{ width: '12px', textAlign: 'center', color: '#cbd5e1' }}>•</span>
                 )}
                 {badgeNivel(item.TipoNivel)}
-                <span style={{ fontWeight: item.TipoNivel === 'Ensamble' ? 700 : 500, fontSize: '13px' }}>
+                <span style={{
+                  fontWeight: item.TipoNivel === 'Ensamble' ? 700 : 500,
+                  fontSize: '13px',
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                  flex: 1
+                }}>
                   {item.Nombre}
                 </span>
               </div>
@@ -372,7 +378,14 @@ export default function GestionIngenieria({
                   <span style={{ width: '12px', color: '#cbd5e1' }}>•</span>
                 )}
                 {badgeNivel(item.TipoNivel)}
-                <strong style={{ fontSize: '13px' }}>{item.Nombre}</strong>
+                <strong style={{
+                  fontSize: '13px',
+                  whiteSpace: 'normal',
+                  wordBreak: 'break-word',
+                  flex: 1
+                }}>
+                  {item.Nombre}
+                </strong>
               </div>
             </td>
 
@@ -530,7 +543,7 @@ export default function GestionIngenieria({
 
       {/* PESTAÑA 1: EXPLORADOR BOM + VISOR 3D */}
       {subVista === 'explorador' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(340px, 40%) 1fr', gap: '20px', alignItems: 'start' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(600px, 45%) 1fr', gap: '20px', alignItems: 'start' }}>
           <div className="pro-card" style={{ height: '640px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-light)' }}>
               <h3 style={{ fontSize: '15px' }}>📂 Árbol Estructural de Ensamble (BOM)</h3>
@@ -540,7 +553,7 @@ export default function GestionIngenieria({
                 <thead>
                   <tr>
                     <th>Estructura</th>
-                    <th style={{ textAlign: 'right' }}>Inspección</th>
+                    <th style={{ textAlign: 'right', width: '25%' }}>Inspección</th>
                   </tr>
                 </thead>
                 <tbody>
