@@ -177,7 +177,7 @@ export default function GestionChatbot({
     if (q.includes('proyecto')) {
       return `⚠️ *(Modo local sin conexión a server2.js)*\nTienes **${proyectos.length} proyectos** registrados en el catálogo corporativo.`
     }
-    return `⚠️ No se pudo conectar con **${urlServidorChat}/api/chat**.\nVerifica que tu terminal tenga corriendo \`node server2.js\` en el puerto 3001 y que tu \`DEEPSEEK_API_KEY\` esté configurada en el archivo \`.env\`.`
+    return `⚠️ No se pudo conectar con **${urlServidorChat}/api/chat**.\nVerifica que tu terminal tenga corriendo \`node server2.js\` en el puerto 3001 y que tu \`GEMINI_API_KEY\` esté configurada en las variables de entorno.`
   }
 
   const enviarConsulta = async (textoConsulta) => {

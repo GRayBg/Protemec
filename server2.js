@@ -48,6 +48,7 @@ const getDbPool = async () => {
 // 2. CONFIGURACIÓN DE GEMINI API (Vía OpenAI SDK)
 // ==========================================
 const apiKeyGemini = process.env.GEMINI_API_KEY;
+const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
 const gemini = new OpenAI({
     baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
@@ -189,7 +190,7 @@ app.get('/api/health', async (req, res) => {
     try {
         const pool = await getDbPool();
         await pool.request().query('SELECT 1 AS ok');
-        res.json({ status: 'ok', database: 'connected', llm: 'gemini-1.5-flash' });
+        res.json({ status: 'ok', database: 'connected', llm: geminiModel });
     } catch (err) {
         res.status(500).json({ status: 'error', database: 'disconnected', details: err.message });
     }
@@ -225,7 +226,7 @@ Reglas de operación:
             iterations++;
 
             const response = await gemini.chat.completions.create({
-                model: 'gemini-1.5-flash',
+                model: geminiModel,
                 messages: messages,
                 tools: openAiTools,
                 tool_choice: 'auto',
