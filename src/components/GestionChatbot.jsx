@@ -137,7 +137,7 @@ function RenderizadorMarkdown({ contenido }) {
 }
 
 export default function GestionChatbot({
-  CHAT_API_URL = 'http://localhost:3001',
+  CHAT_API_URL = 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net/',
   API_URL = '',
   compras = [],
   proyectos = [],
