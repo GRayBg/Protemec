@@ -15,8 +15,8 @@ import ModalConfiguracion from './components/ModalConfiguracion'
 
 const API_URL = import.meta.env.VITE_API_URL || 'https://backend-protemec-frabdwebd0exgmf7.westus3-01.azurewebsites.net/'
 
-// URL donde corre tu server2.js (puerto 3001 en local o variable de entorno si lo subes a Azure)
-const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || 'http://localhost:3001'
+// URL donde corre tu server2.js en Azure App Service (api-chatbot) o local
+const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net'
 
 const PERFIL_MAESTRO_TOTAL = {
   id: 1,

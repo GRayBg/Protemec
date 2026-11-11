@@ -9,17 +9,17 @@ import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprot
 dotenv.config();
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json());
 
 // ==========================================
 // 1. CONFIGURACIÓN DE AZURE SQL DATABASE
 // ==========================================
 const dbConfig = {
-    user: process.env.DB_USER || process.env.SQL_USER,
-    password: process.env.DB_PASSWORD || process.env.SQL_PASSWORD,
-    server: process.env.DB_SERVER || process.env.SQL_SERVER,
-    database: process.env.DB_DATABASE || process.env.SQL_DATABASE,
+    user: process.env.DB_USER || process.env.SQL_USER || 'adminprote',
+    password: process.env.DB_PASSWORD || process.env.SQL_PASSWORD || 'Prote2026@',
+    server: process.env.DB_SERVER || process.env.SQL_SERVER || 'protemec.database.windows.net',
+    database: process.env.DB_DATABASE || process.env.SQL_DATABASE || 'Compras_Temporal',
     options: {
         encrypt: true, // Obligatorio para Azure SQL
         trustServerCertificate: false,
@@ -183,8 +183,26 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // ==========================================
-// 5. ENDPOINT PARA EL CHATBOT DEL FRONTEND
+// 5. ENDPOINTS DE SALUD Y CHATBOT DEL FRONTEND
 // ==========================================
+app.get('/', (req, res) => {
+    res.json({
+        status: 'online',
+        service: 'Protemec Intelligence - Servidor MCP + DeepSeek + Azure SQL',
+        endpoints: ['POST /api/chat', 'GET /api/health'],
+    });
+});
+
+app.get('/api/health', async (req, res) => {
+    try {
+        const pool = await getDbPool();
+        await pool.request().query('SELECT 1 AS ok');
+        res.json({ status: 'ok', database: 'connected', llm: 'deepseek-chat' });
+    } catch (err) {
+        res.status(500).json({ status: 'error', database: 'disconnected', details: err.message });
+    }
+});
+
 app.post('/api/chat', async (req, res) => {
     try {
         const { message, history = [] } = req.body;
@@ -263,8 +281,8 @@ Reglas de operación:
     }
 });
 
-// Puerto fijo en 3001 para no colisionar con el puerto 3000 de server.js
-const PORT = process.env.PORT;
+// Puerto asignado por Azure App Service (8080) o 3001 en local
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`✅ Servidor ERP + MCP + DeepSeek activo en http://localhost:${PORT}`);
     console.log(`🔑 API Key DeepSeek cargada (termina en: ...${apiKeyDeepSeek.slice(-4)})`);

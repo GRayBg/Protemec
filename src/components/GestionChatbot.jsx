@@ -136,8 +136,11 @@ function RenderizadorMarkdown({ contenido }) {
   return <div>{elementos}</div>
 }
 
+const AZURE_CHAT_URL = 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net'
+const LOCAL_CHAT_URL = 'http://localhost:3001'
+
 export default function GestionChatbot({
-  CHAT_API_URL = 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net/',
+  CHAT_API_URL = AZURE_CHAT_URL,
   API_URL = '',
   compras = [],
   proyectos = [],
@@ -153,7 +156,9 @@ export default function GestionChatbot({
   ])
   const [entrada, setEntrada] = useState('')
   const [pensando, setPensando] = useState(false)
-  const [urlServidorChat, setUrlServidorChat] = useState(CHAT_API_URL)
+  const [urlServidorChat, setUrlServidorChat] = useState(() =>
+    (CHAT_API_URL || AZURE_CHAT_URL).replace(/\/+$/, '')
+  )
 
   const finMensajesRef = useRef(null)
 
@@ -195,7 +200,8 @@ export default function GestionChatbot({
       }))
 
     try {
-      const res = await fetch(`${urlServidorChat}/api/chat`, {
+      const baseUrlLimpia = String(urlServidorChat || AZURE_CHAT_URL).replace(/\/+$/, '')
+      const res = await fetch(`${baseUrlLimpia}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -294,7 +300,7 @@ export default function GestionChatbot({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {/* Selector rápido por si pruebas en localhost:3001 o en el servidor productivo */}
+          {/* Selector rápido por si pruebas en Azure Cloud o en localhost:3001 */}
           <select
             value={urlServidorChat}
             onChange={(e) => setUrlServidorChat(e.target.value)}
@@ -302,10 +308,8 @@ export default function GestionChatbot({
             style={{ fontSize: '11.5px', padding: '5px 8px', width: 'auto', height: '30px' }}
             title="Endpoint del servidor MCP"
           >
-            <option value={CHAT_API_URL}>Local MCP ({CHAT_API_URL})</option>
-            {API_URL && API_URL !== CHAT_API_URL && (
-              <option value={API_URL}>Azure Cloud ({API_URL})</option>
-            )}
+            <option value={AZURE_CHAT_URL}>Azure Cloud ({AZURE_CHAT_URL})</option>
+            <option value={LOCAL_CHAT_URL}>Local MCP ({LOCAL_CHAT_URL})</option>
           </select>
 
           <button
