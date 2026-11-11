@@ -13,7 +13,8 @@ import GestionGerencia from './components/GestionGerencia'
 import GestionChatbot from './components/GestionChatbot'
 import ModalConfiguracion from './components/ModalConfiguracion'
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://pruebajs-ezbja7gjf9cmg4fn.centralus-01.azurewebsites.net'
+const API_URL = import.meta.env.VITE_API_URL || 'https://backend-protemec-frabdwebd0exgmf7.westus3-01.azurewebsites.net/'
+
 // URL donde corre tu server2.js (puerto 3001 en local o variable de entorno si lo subes a Azure)
 const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || 'http://localhost:3001'
 
