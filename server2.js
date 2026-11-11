@@ -264,7 +264,7 @@ Reglas de operación:
 });
 
 // Puerto fijo en 3001 para no colisionar con el puerto 3000 de server.js
-const PORT = 3001;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
     console.log(`✅ Servidor ERP + MCP + DeepSeek activo en http://localhost:${PORT}`);
     console.log(`🔑 API Key DeepSeek cargada (termina en: ...${apiKeyDeepSeek.slice(-4)})`);
