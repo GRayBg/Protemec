@@ -13,8 +13,9 @@ import GestionGerencia from './components/GestionGerencia'
 import GestionChatbot from './components/GestionChatbot'
 import ModalConfiguracion from './components/ModalConfiguracion'
 
-//const API_URL = import.meta.env.VITE_API_URL
 const API_URL = import.meta.env.VITE_API_URL || 'https://pruebajs-ezbja7gjf9cmg4fn.centralus-01.azurewebsites.net'
+// URL donde corre tu server2.js (puerto 3001 en local o variable de entorno si lo subes a Azure)
+const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || 'http://localhost:3001'
 
 const PERFIL_MAESTRO_TOTAL = {
   id: 1,
@@ -281,7 +282,12 @@ export default function App() {
       const metodo = (init?.method || 'GET').toUpperCase()
       const urlStr = typeof input === 'string' ? input : input?.url || ''
 
-      if (['POST', 'PUT', 'DELETE'].includes(metodo) && !urlStr.includes('/api/login')) {
+      // Excluimos /api/login y /api/chat (el chatbot usa POST pero solo hace consultas SELECT en el servidor MCP)
+      if (
+        ['POST', 'PUT', 'DELETE'].includes(metodo) &&
+        !urlStr.includes('/api/login') &&
+        !urlStr.includes('/api/chat')
+      ) {
         const user = permisosRef.current
         if (user && !user.esMaestro) {
           let moduloRequerido = moduloRef.current
@@ -329,7 +335,8 @@ export default function App() {
     if (!contenedor) return
 
     const aplicarCandadoDOM = () => {
-      if (puedeEditarModuloActual) {
+      // En el módulo de chatbot siempre permitimos usar el formulario y botón de enviar preguntas
+      if (puedeEditarModuloActual || moduloActivo === 'chatbot') {
         contenedor.querySelectorAll('[data-bloqueado-lectura="true"]').forEach((el) => {
           el.style.display = ''
           el.disabled = false
@@ -338,14 +345,12 @@ export default function App() {
         return
       }
 
-      if (moduloActivo !== 'chatbot') {
-        contenedor.querySelectorAll('form').forEach((formEl) => {
-          if (formEl.getAttribute('data-bloqueado-lectura') !== 'true') {
-            formEl.style.display = 'none'
-            formEl.setAttribute('data-bloqueado-lectura', 'true')
-          }
-        })
-      }
+      contenedor.querySelectorAll('form').forEach((formEl) => {
+        if (formEl.getAttribute('data-bloqueado-lectura') !== 'true') {
+          formEl.style.display = 'none'
+          formEl.setAttribute('data-bloqueado-lectura', 'true')
+        }
+      })
 
       contenedor.querySelectorAll('button, label.pro-btn').forEach((btn) => {
         const texto = btn.textContent || ''
@@ -401,7 +406,7 @@ export default function App() {
   // FUNCIÓN GLOBAL DE SINCRONIZACIÓN PARA TODOS LOS MÓDULOS DEL ERP
   const recargarDatos = useCallback(async (silencioso = false) => {
     if (!silencioso) setSincronizando(true)
-    setSyncTrigger((prev) => prev + 1) // <-- Fuerza actualización en módulos con estado interno (Almacén y Visor 3D)
+    setSyncTrigger((prev) => prev + 1)
     const ts = Date.now()
 
     const fetchSeguro = async (endpoint) => {
@@ -875,7 +880,7 @@ export default function App() {
     { id: 'kanban', label: 'Tablero Kanban', icono: '📋', badge: disenos.length },
     { id: 'almacen', label: 'Almacén Digital 3D', icono: '📦', badge: null },
     { id: 'rh', label: 'Recursos Humanos', icono: '👥', badge: personalRH.filter((p) => p.Activo).length },
-    { id: 'chatbot', label: 'Asistente IA', icono: '✨', badge: 'AI' }
+    { id: 'chatbot', label: 'Asistente IA', icono: '✨', badge: 'MCP' }
   ].filter(
     (item) =>
       usuarioConPermisosActualizados.esMaestro ||
@@ -916,8 +921,8 @@ export default function App() {
       subtitulo: 'Expedientes de colaboradores de planta, estatus activo/baja y evaluación de KPIs'
     },
     chatbot: {
-      titulo: 'Protemec Intelligence',
-      subtitulo: 'Copiloto empresarial conectado a tus operaciones'
+      titulo: 'Protemec Intelligence (DeepSeek + MCP)',
+      subtitulo: 'Agente analítico conectado en tiempo real a Azure SQL Database'
     }
   }[moduloActivo] || { titulo: 'Protemec ERP', subtitulo: '' }
 
@@ -931,7 +936,7 @@ export default function App() {
   }
 
   const bloquearClicEdicionEnSoloLectura = (e) => {
-    if (puedeEditarModuloActual) return
+    if (puedeEditarModuloActual || moduloActivo === 'chatbot') return
     const btn = e.target.closest('button')
     if (!btn) return
     const texto = btn.textContent || ''
@@ -1070,7 +1075,7 @@ export default function App() {
               <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#1d1d1f' }}>
                 {infoEncabezado.titulo}
               </h1>
-              {!puedeEditarModuloActual && (
+              {!puedeEditarModuloActual && moduloActivo !== 'chatbot' && (
                 <span
                   className="pro-badge"
                   style={{
@@ -1285,8 +1290,17 @@ export default function App() {
                 />
               )}
 
-              {/* 8. ASISTENTE IA */}
-              {moduloActivo === 'chatbot' && <GestionChatbot compras={compras} proyectos={proyectos} />}
+              {/* 8. ASISTENTE IA (CONECTADO A SERVER2.JS CON MCP + DEEPSEEK) */}
+              {moduloActivo === 'chatbot' && (
+                <GestionChatbot
+                  CHAT_API_URL={CHAT_API_URL}
+                  API_URL={API_URL}
+                  compras={compras}
+                  proyectos={proyectos}
+                  usuarioActual={usuarioConPermisosActualizados}
+                  mostrarToast={mostrarToast}
+                />
+              )}
             </div>
           )}
         </main>
