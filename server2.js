@@ -21,7 +21,7 @@ const dbConfig = {
     server: process.env.DB_SERVER || process.env.SQL_SERVER || 'protemec.database.windows.net',
     database: process.env.DB_DATABASE || process.env.SQL_DATABASE || 'Compras_Temporal',
     options: {
-        encrypt: true, // Obligatorio para Azure SQL
+        encrypt: true,
         trustServerCertificate: false,
         connectTimeout: 30000,
     },
@@ -45,17 +45,13 @@ const getDbPool = async () => {
 };
 
 // ==========================================
-// 2. CONFIGURACIÓN DE DEEPSEEK API DIRECTA
+// 2. CONFIGURACIÓN DE GEMINI API (Vía OpenAI SDK)
 // ==========================================
-// Si el .env tiene el placeholder terminado en "seek", fuerza el uso de tu API Key real
-const envKey = (process.env.DEEPSEEK_API_KEY || '').trim();
-const apiKeyDeepSeek = (!envKey || envKey.endsWith('seek'))
-    ? 'sk-5543dea9551f452fba9e5473749bc344'
-    : envKey;
+const apiKeyGemini = process.env.GEMINI_API_KEY;
 
-const deepseek = new OpenAI({
-    baseURL: 'https://api.deepseek.com',
-    apiKey: apiKeyDeepSeek,
+const gemini = new OpenAI({
+    baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    apiKey: apiKeyGemini,
 });
 
 // ==========================================
@@ -93,7 +89,6 @@ const mcpTools = [
     },
 ];
 
-// Adaptador automático del esquema MCP al formato de Tools de DeepSeek/OpenAI
 const openAiTools = mcpTools.map((tool) => ({
     type: 'function',
     function: {
@@ -103,7 +98,6 @@ const openAiTools = mcpTools.map((tool) => ({
     },
 }));
 
-// Lógica central de ejecución de herramientas contra Azure SQL
 async function executeMcpTool(name, args) {
     const pool = await getDbPool();
 
@@ -133,8 +127,6 @@ async function executeMcpTool(name, args) {
 
     if (name === 'ejecutar_consulta_sql') {
         const sqlQuery = (args?.query || '').trim();
-
-        // Guardrail de seguridad: bloquear cualquier comando que no sea SELECT o CTE (WITH)
         const isSelect = /^(SELECT|WITH)\b/i.test(sqlQuery);
         const hasForbiddenKeywords = /\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE|EXEC|EXECUTE|MERGE|GRANT|REVOKE)\b/i.test(sqlQuery);
 
@@ -188,7 +180,7 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 app.get('/', (req, res) => {
     res.json({
         status: 'online',
-        service: 'Protemec Intelligence - Servidor MCP + DeepSeek + Azure SQL',
+        service: 'Protemec Intelligence - Servidor MCP + Gemini Flash + Azure SQL',
         endpoints: ['POST /api/chat', 'GET /api/health'],
     });
 });
@@ -197,7 +189,7 @@ app.get('/api/health', async (req, res) => {
     try {
         const pool = await getDbPool();
         await pool.request().query('SELECT 1 AS ok');
-        res.json({ status: 'ok', database: 'connected', llm: 'deepseek-chat' });
+        res.json({ status: 'ok', database: 'connected', llm: 'gemini-1.5-flash' });
     } catch (err) {
         res.status(500).json({ status: 'error', database: 'disconnected', details: err.message });
     }
@@ -232,8 +224,8 @@ Reglas de operación:
         while (iterations < MAX_ITERATIONS) {
             iterations++;
 
-            const response = await deepseek.chat.completions.create({
-                model: 'deepseek-chat',
+            const response = await gemini.chat.completions.create({
+                model: 'gemini-1.5-flash',
                 messages: messages,
                 tools: openAiTools,
                 tool_choice: 'auto',
@@ -243,7 +235,6 @@ Reglas de operación:
             const assistantMessage = response.choices[0].message;
             messages.push(assistantMessage);
 
-            // Si DeepSeek ya tiene la respuesta final y no requiere más consultas SQL, la enviamos al frontend
             if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
                 return res.json({
                     reply: assistantMessage.content,
@@ -252,7 +243,6 @@ Reglas de operación:
                 });
             }
 
-            // Ejecutar las herramientas MCP solicitadas por DeepSeek
             for (const toolCall of assistantMessage.tool_calls) {
                 const toolName = toolCall.function.name;
                 const toolArgs = JSON.parse(toolCall.function.arguments || '{}');
@@ -275,15 +265,13 @@ Reglas de operación:
     } catch (error) {
         console.error('Error en /api/chat:', error);
         res.status(500).json({
-            error: 'Error procesando la solicitud con DeepSeek y Azure SQL.',
+            error: 'Error procesando la solicitud con Gemini y Azure SQL.',
             details: error.message,
         });
     }
 });
 
-// Puerto asignado por Azure App Service (8080) o 3001 en local
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-    console.log(`✅ Servidor ERP + MCP + DeepSeek activo en http://localhost:${PORT}`);
-    console.log(`🔑 API Key DeepSeek cargada (termina en: ...${apiKeyDeepSeek.slice(-4)})`);
+    console.log(`✅ Servidor ERP + MCP + Gemini Flash activo en http://localhost:${PORT}`);
 });
