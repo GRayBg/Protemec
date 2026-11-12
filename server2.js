@@ -202,9 +202,16 @@ async function executeMcpTool(name, args) {
 }
 
 // ==========================================
-// 5. CLIENTE NATIVO GEMINI REST (SOPORTA GEMINI 2.5 FLASH + FALLBACK POR 503)
+// 5. CLIENTE NATIVO GEMINI REST (CON REINTENTO EXPONENCIAL Y MODELOS LITE ANTE 503)
 // ==========================================
-const MODELOS_FALLBACK_FREE = ['gemini-3.8-flash', 'gemini-flash-latest', 'gemini-3.7-flash', 'gemini-3.5-flash-lite'];
+// Modelos gratuitos de diferentes familias para evitar caer en el mismo pool saturado
+const MODELOS_FALLBACK_FREE = [
+    'gemini-3.8-flash',
+    'gemini-3.5-flash-lite',
+    'gemini-3.7-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-2.5-flash-lite',
+];
 
 const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -243,40 +250,50 @@ async function llamarGeminiGenerateContent({ systemPrompt, contents, allowTools 
         };
     }
 
-    // Lista sin duplicados: primero el modelo preferido, luego los respaldos gratuitos en caso de saturación (503)
     const candidatos = [...new Set([modeloPreferido, ...MODELOS_FALLBACK_FREE])];
     let ultimoError = null;
 
     for (let idx = 0; idx < candidatos.length; idx++) {
         const modeloActual = candidatos[idx];
-        const { res, data } = await ejecutarPeticionGemini(modeloActual, body);
 
-        if (res.ok) {
-            return { data, modeloUsado: modeloActual };
-        }
+        // Intentamos hasta 2 veces con el modelo si devuelve 503 (con backoff de 1.5s)
+        for (let intento = 1; intento <= 2; intento++) {
+            const { res, data } = await ejecutarPeticionGemini(modeloActual, body);
 
-        const msg = data?.error?.message || `HTTP ${res.status} al llamar a Gemini API`;
-        const status = data?.error?.status || res.status;
-
-        // Si el modelo está saturado temporalmente (503), esperamos brevemente y probamos el siguiente modelo gratuito
-        if (res.status === 503) {
-            console.warn(`⚠️ ${modeloActual} devolvió 503 (alta demanda). Probando respaldo...`);
-            ultimoError = new Error(`Servidores gratuitos de Gemini saturados temporalmente (503 UNAVAILABLE): ${msg}`);
-            if (idx < candidatos.length - 1) {
-                await esperar(800);
-                continue;
+            if (res.ok) {
+                return { data, modeloUsado: modeloActual };
             }
-            throw ultimoError;
-        }
 
-        if (res.status === 429) {
-            throw new Error(`Límite de cuota gratuita de Gemini alcanzado (429 RESOURCE_EXHAUSTED). Espera unos segundos antes de enviar otra consulta. Detalle: ${msg}`);
-        }
+            const msg = data?.error?.message || `HTTP ${res.status} al llamar a Gemini API`;
+            const status = data?.error?.status || res.status;
 
-        throw new Error(`Error de Gemini API (${status}): ${msg}`);
+            if (res.status === 503) {
+                console.warn(`⚠️ ${modeloActual} devolvió 503 (alta demanda, intento ${intento}/2).`);
+                ultimoError = new Error(`Los servidores gratuitos de Gemini están experimentando alta demanda en este momento (503 UNAVAILABLE). Por favor espera unos segundos y pulsa 'Reintentar'.`);
+
+                if (intento < 2) {
+                    await esperar(1500);
+                    continue;
+                }
+                // Si el modelo principal agotó sus 2 intentos, pasamos al siguiente modelo de la lista
+                break;
+            }
+
+            if (res.status === 429) {
+                throw new Error(`Límite de consultas por minuto alcanzado en la capa gratuita (429 RESOURCE_EXHAUSTED). Espera 10 segundos antes de enviar otra pregunta.`);
+            }
+
+            // Si es un error 404 de modelo, continuamos al siguiente modelo
+            if (res.status === 404) {
+                console.warn(`⚠️ Modelo ${modeloActual} no disponible (404), probando siguiente...`);
+                break;
+            }
+
+            throw new Error(`Error de Gemini API (${status}): ${msg}`);
+        }
     }
 
-    throw ultimoError || new Error('No se pudo obtener respuesta de Gemini API.');
+    throw ultimoError || new Error('No se pudo obtener respuesta de los servidores de Gemini tras varios reintentos.');
 }
 
 // ==========================================

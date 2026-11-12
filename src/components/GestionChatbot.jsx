@@ -244,14 +244,15 @@ export default function GestionChatbot({
       console.error('Error en consulta del chatbot:', err)
       if (err.esErrorDeApi) {
         if (mostrarToast) {
-          mostrarToast('El servidor respondió con un error de Gemini API', 'alerta')
+          mostrarToast('Error temporal de Gemini API', 'alerta')
         }
         setMensajes((prev) => [
           ...prev,
           {
             remitente: 'bot',
-            texto: `⚠️ **El servidor MCP recibió tu mensaje, pero ocurrió un error al procesar con Gemini API:**\n\n\`${err.message}\``,
-            esError: true
+            texto: `⚠️ **Aviso de Gemini API:**\n\n${err.message}`,
+            esError: true,
+            reintentarPrompt: preguntaLimpia
           }
         ])
       } else {
@@ -367,7 +368,22 @@ export default function GestionChatbot({
               {esUsuario ? (
                 <div>{m.texto}</div>
               ) : (
-                <RenderizadorMarkdown contenido={m.texto} />
+                <>
+                  <RenderizadorMarkdown contenido={m.texto} />
+                  {m.reintentarPrompt && (
+                    <div style={{ marginTop: '10px' }}>
+                      <button
+                        type="button"
+                        disabled={pensando}
+                        onClick={() => enviarConsulta(m.reintentarPrompt)}
+                        className="pro-btn pro-btn-secondary pro-btn-sm"
+                        style={{ fontSize: '12px', padding: '4px 10px' }}
+                      >
+                        🔄 Reintentar consulta
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
 
               {/* Metadatos de ejecución MCP y Tokens */}
