@@ -157,7 +157,7 @@ export default function GestionChatbot({
   const [mensajes, setMensajes] = useState([
     {
       remitente: 'bot',
-      texto: `¡Hola${usuarioActual?.nombre ? `, **${usuarioActual.nombre}**` : ''}! Soy **Protemec Intelligence** impulsado por **Gemini Flash + MCP**.\nTengo conexión directa de lectura a las tablas de **Azure SQL Database** del ERP. ¿Qué datos o métricas deseas analizar hoy?`,
+      texto: `¡Hola${usuarioActual?.nombre ? `, **${usuarioActual.nombre}**` : ''}! Soy **Protemec Intelligence** impulsado por **Gemini Flash-Lite + MCP**.\nTengo conexión directa de lectura a las tablas de **Azure SQL Database** del ERP. ¿Qué datos o métricas deseas analizar hoy?`,
       meta: null
     }
   ])
@@ -317,7 +317,7 @@ export default function GestionChatbot({
                   fontWeight: 700
                 }}
               >
-                Gemini Flash + Azure SQL MCP
+                Gemini Flash-Lite + Azure SQL MCP
               </span>
             </div>
             <p style={{ fontSize: '12px', color: '#86868b', margin: 0 }}>
@@ -406,7 +406,7 @@ export default function GestionChatbot({
           <div style={estilos.burbujaBot}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#4b5563', fontSize: '13px', fontWeight: 500 }}>
               <div style={estilos.miniSpinner} />
-              <span>Consultando tablas en Azure SQL mediante MCP y analizando con Gemini Flash...</span>
+              <span>Consultando tablas en Azure SQL mediante MCP y analizando con Gemini Flash-Lite...</span>
             </div>
           </div>
         )}

@@ -47,7 +47,7 @@ const getDbPool = async () => {
 // 2. CONFIGURACIÓN DE GEMINI API (FREE TIER OPTIMIZADO)
 // ==========================================
 const apiKeyGemini = (process.env.GEMINI_API_KEY || '').trim();
-const geminiModel = (process.env.GEMINI_MODEL || 'gemini-3.8-flash').trim();
+const geminiModel = (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim();
 
 // ==========================================
 // 3. CACHÉ DE ESQUEMA SQL (AHORRA LLAMADAS EN CAPA FREE)
@@ -204,13 +204,12 @@ async function executeMcpTool(name, args) {
 // ==========================================
 // 5. CLIENTE NATIVO GEMINI REST (CON REINTENTO EXPONENCIAL Y MODELOS LITE ANTE 503)
 // ==========================================
-// Modelos gratuitos de diferentes familias para evitar caer en el mismo pool saturado
+// Modelos gratuitos de alta cuota (Lite) para evitar límites y saturación
 const MODELOS_FALLBACK_FREE = [
-    'gemini-3.8-flash',
     'gemini-3.5-flash-lite',
-    'gemini-3.7-flash',
+    'gemini-flash-lite-latest',
     'gemini-3.1-flash-lite',
-    'gemini-2.5-flash-lite',
+    'gemini-3.8-flash',
 ];
 
 const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
