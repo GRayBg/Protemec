@@ -139,6 +139,13 @@ function RenderizadorMarkdown({ contenido }) {
 const AZURE_CHAT_URL = 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net'
 const LOCAL_CHAT_URL = 'http://localhost:3001'
 
+function limpiarUrlBase(url) {
+  const limpia = String(url || AZURE_CHAT_URL).trim().replace(/\/+$/, '')
+  if (!limpia) return AZURE_CHAT_URL
+  if (/^https?:\/\//i.test(limpia)) return limpia
+  return `https://${limpia}`
+}
+
 export default function GestionChatbot({
   CHAT_API_URL = AZURE_CHAT_URL,
   API_URL = '',
@@ -150,15 +157,18 @@ export default function GestionChatbot({
   const [mensajes, setMensajes] = useState([
     {
       remitente: 'bot',
-      texto: `¡Hola${usuarioActual?.nombre ? `, **${usuarioActual.nombre}**` : ''}! Soy **Protemec Intelligence** impulsado por **DeepSeek + MCP**.\nTengo conexión directa de lectura a las tablas de **Azure SQL Database** del ERP. ¿Qué datos o métricas deseas analizar hoy?`,
+      texto: `¡Hola${usuarioActual?.nombre ? `, **${usuarioActual.nombre}**` : ''}! Soy **Protemec Intelligence** impulsado por **Gemini Flash + MCP**.\nTengo conexión directa de lectura a las tablas de **Azure SQL Database** del ERP. ¿Qué datos o métricas deseas analizar hoy?`,
       meta: null
     }
   ])
   const [entrada, setEntrada] = useState('')
   const [pensando, setPensando] = useState(false)
-  const [urlServidorChat, setUrlServidorChat] = useState(() =>
-    (CHAT_API_URL || AZURE_CHAT_URL).replace(/\/+$/, '')
-  )
+  const [urlServidorChat, setUrlServidorChat] = useState(() => {
+    const esEntornoLocal =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    return esEntornoLocal ? LOCAL_CHAT_URL : limpiarUrlBase(CHAT_API_URL || AZURE_CHAT_URL)
+  })
 
   const finMensajesRef = useRef(null)
 
@@ -200,7 +210,7 @@ export default function GestionChatbot({
       }))
 
     try {
-      const baseUrlLimpia = String(urlServidorChat || AZURE_CHAT_URL).replace(/\/+$/, '')
+      const baseUrlLimpia = limpiarUrlBase(urlServidorChat || AZURE_CHAT_URL)
       const res = await fetch(`${baseUrlLimpia}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -210,10 +220,12 @@ export default function GestionChatbot({
         })
       })
 
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
 
       if (!res.ok) {
-        throw new Error(data.details || data.error || 'Error en el servidor MCP')
+        const errorServidor = new Error(data.details || data.error || `Error HTTP ${res.status} en el servidor MCP`)
+        errorServidor.esErrorDeApi = true
+        throw errorServidor
       }
 
       setMensajes((prev) => [
@@ -229,19 +241,33 @@ export default function GestionChatbot({
         }
       ])
     } catch (err) {
-      console.error('Error conectando con server2.js:', err)
-      if (mostrarToast) {
-        mostrarToast('No se detectó server2.js activo, usando respaldo local', 'alerta')
-      }
-      const respuestaFallback = generarRespuestaRespaldoLocal(preguntaLimpia)
-      setMensajes((prev) => [
-        ...prev,
-        {
-          remitente: 'bot',
-          texto: `${respuestaFallback}\n\nDetalle técnico: \`${err.message}\``,
-          esError: true
+      console.error('Error en consulta del chatbot:', err)
+      if (err.esErrorDeApi) {
+        if (mostrarToast) {
+          mostrarToast('El servidor respondió con un error de Gemini API', 'alerta')
         }
-      ])
+        setMensajes((prev) => [
+          ...prev,
+          {
+            remitente: 'bot',
+            texto: `⚠️ **El servidor MCP recibió tu mensaje, pero ocurrió un error al procesar con Gemini API:**\n\n\`${err.message}\``,
+            esError: true
+          }
+        ])
+      } else {
+        if (mostrarToast) {
+          mostrarToast('No se detectó server2.js activo, usando respaldo local', 'alerta')
+        }
+        const respuestaFallback = generarRespuestaRespaldoLocal(preguntaLimpia)
+        setMensajes((prev) => [
+          ...prev,
+          {
+            remitente: 'bot',
+            texto: `${respuestaFallback}\n\nDetalle técnico: \`${err.message}\``,
+            esError: true
+          }
+        ])
+      }
     } finally {
       setPensando(false)
     }
@@ -290,7 +316,7 @@ export default function GestionChatbot({
                   fontWeight: 700
                 }}
               >
-                DeepSeek + Azure SQL MCP
+                Gemini Flash + Azure SQL MCP
               </span>
             </div>
             <p style={{ fontSize: '12px', color: '#86868b', margin: 0 }}>
@@ -364,7 +390,7 @@ export default function GestionChatbot({
           <div style={estilos.burbujaBot}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#4b5563', fontSize: '13px', fontWeight: 500 }}>
               <div style={estilos.miniSpinner} />
-              <span>Consultando tablas en Azure SQL mediante MCP y analizando con DeepSeek...</span>
+              <span>Consultando tablas en Azure SQL mediante MCP y analizando con Gemini Flash...</span>
             </div>
           </div>
         )}

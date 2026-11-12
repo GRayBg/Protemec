@@ -13,10 +13,23 @@ import GestionGerencia from './components/GestionGerencia'
 import GestionChatbot from './components/GestionChatbot'
 import ModalConfiguracion from './components/ModalConfiguracion'
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://backend-protemec-frabdwebd0exgmf7.westus3-01.azurewebsites.net/'
+function normalizarUrlConProtocolo(url, fallback) {
+  const valor = String(url || fallback || '').trim().replace(/\/+$/, '')
+  if (!valor) return fallback
+  if (/^https?:\/\//i.test(valor)) return valor
+  return `https://${valor}`
+}
+
+const API_URL = normalizarUrlConProtocolo(
+  import.meta.env.VITE_API_URL,
+  'https://backend-protemec-frabdwebd0exgmf7.westus3-01.azurewebsites.net'
+)
 
 // URL donde corre tu server2.js en Azure App Service (api-chatbot) o local
-const CHAT_API_URL = import.meta.env.VITE_CHAT_API_URL || 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net'
+const CHAT_API_URL = normalizarUrlConProtocolo(
+  import.meta.env.VITE_CHAT_API_URL,
+  'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net'
+)
 
 const PERFIL_MAESTRO_TOTAL = {
   id: 1,
