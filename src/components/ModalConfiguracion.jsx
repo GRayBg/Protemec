@@ -17,6 +17,7 @@ export default function ModalConfiguracion({
   abierto,
   alCerrar,
   API_URL,
+  CHAT_API_URL = 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net',
   perfilesUsuarios = [],
   setPerfilesUsuarios,
   credencialesMaestras,
@@ -30,6 +31,8 @@ export default function ModalConfiguracion({
   const [perfilSeleccionadoId, setPerfilSeleccionadoId] = useState(perfilesUsuarios[0]?.id || null)
   const [mostrarFormularioNuevo, setMostrarFormularioNuevo] = useState(false)
   const [guardandoDB, setGuardandoDB] = useState(false)
+  const [tablasBD, setTablasBD] = useState([])
+  const [cargandoTablas, setCargandoTablas] = useState(false)
 
   // Estados para crear un Nuevo Perfil con Nombre, Usuario y Contraseña
   const [nuevoNombre, setNuevoNombre] = useState('')
@@ -54,6 +57,35 @@ export default function ModalConfiguracion({
       setPerfilSeleccionadoId(perfilesUsuarios[0].id)
     }
   }, [perfilesUsuarios, perfilSeleccionadoId])
+
+  // Cargar lista real de tablas de Azure SQL desde el servidor MCP
+  useEffect(() => {
+    if (!abierto) return
+    const esLocal =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    const baseChatUrl = esLocal
+      ? 'http://localhost:3001'
+      : String(CHAT_API_URL || 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net').replace(/\/+$/, '')
+
+    let cancelado = false
+    setCargandoTablas(true)
+    fetch(`${baseChatUrl}/api/tablas`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelado && Array.isArray(data?.tablas)) {
+          setTablasBD(data.tablas)
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelado) setCargandoTablas(false)
+      })
+
+    return () => {
+      cancelado = true
+    }
+  }, [abierto, CHAT_API_URL])
 
   if (!abierto) return null
 
@@ -119,6 +151,78 @@ export default function ModalConfiguracion({
     await persistirPerfilEnSQL(perfilModificado)
   }
 
+  // Cambiar configuración de IA (acceso total a tablas o búsqueda en línea)
+  const toggleConfigIA = async (campo) => {
+    if (!autorizadoParaEditarPermisos || !perfilActivo) {
+      if (mostrarToast) mostrarToast('No tienes privilegios para modificar permisos', 'alerta')
+      return
+    }
+    const iaActual = perfilActivo.permisos?.ia || {
+      accesoTotalTablas: true,
+      tablasPermitidas: [],
+      busquedaEnLinea: false
+    }
+    const nuevoValor = campo === 'accesoTotalTablas' ? !(iaActual.accesoTotalTablas !== false) : !iaActual[campo]
+    const iaActualizada = { ...iaActual, [campo]: nuevoValor }
+
+    // Si pasa de acceso total a restringido por primera vez y no tiene lista, preseleccionamos las actuales
+    if (campo === 'accesoTotalTablas' && !nuevoValor && (!iaActual.tablasPermitidas || iaActual.tablasPermitidas.length === 0)) {
+      iaActualizada.tablasPermitidas = [...tablasBD]
+    }
+
+    const perfilModificado = {
+      ...perfilActivo,
+      permisos: { ...perfilActivo.permisos, ia: iaActualizada }
+    }
+    setPerfilesUsuarios((prev) => prev.map((p) => (p.id === perfilActivo.id ? perfilModificado : p)))
+    await persistirPerfilEnSQL(perfilModificado)
+  }
+
+  // Activar/desactivar una tabla específica para la IA del usuario
+  const toggleTablaIA = async (nombreTabla) => {
+    if (!autorizadoParaEditarPermisos || !perfilActivo) return
+    const iaActual = perfilActivo.permisos?.ia || {
+      accesoTotalTablas: false,
+      tablasPermitidas: [],
+      busquedaEnLinea: false
+    }
+    const listaActual = Array.isArray(iaActual.tablasPermitidas) ? iaActual.tablasPermitidas : []
+    const yaTiene = listaActual.includes(nombreTabla)
+    const nuevaLista = yaTiene ? listaActual.filter((t) => t !== nombreTabla) : [...listaActual, nombreTabla]
+
+    const perfilModificado = {
+      ...perfilActivo,
+      permisos: {
+        ...perfilActivo.permisos,
+        ia: { ...iaActual, accesoTotalTablas: false, tablasPermitidas: nuevaLista }
+      }
+    }
+    setPerfilesUsuarios((prev) => prev.map((p) => (p.id === perfilActivo.id ? perfilModificado : p)))
+    await persistirPerfilEnSQL(perfilModificado)
+  }
+
+  const aplicarLoteTablasIA = async (seleccionarTodas) => {
+    if (!autorizadoParaEditarPermisos || !perfilActivo) return
+    const iaActual = perfilActivo.permisos?.ia || {
+      accesoTotalTablas: false,
+      tablasPermitidas: [],
+      busquedaEnLinea: false
+    }
+    const perfilModificado = {
+      ...perfilActivo,
+      permisos: {
+        ...perfilActivo.permisos,
+        ia: {
+          ...iaActual,
+          accesoTotalTablas: false,
+          tablasPermitidas: seleccionarTodas ? [...tablasBD] : []
+        }
+      }
+    }
+    setPerfilesUsuarios((prev) => prev.map((p) => (p.id === perfilActivo.id ? perfilModificado : p)))
+    await persistirPerfilEnSQL(perfilModificado)
+  }
+
   // Actualizar Nombre, Usuario, Email o Contraseña en el estado local
   const actualizarCampoPerfil = (campo, valor) => {
     if (!autorizadoParaEditarPermisos || !perfilActivo) return
@@ -157,7 +261,12 @@ export default function ModalConfiguracion({
         almacen: { ver: true, editar: nuevoRol === 'Almacén' },
         rh: { ver: false, editar: false },
         chatbot: { ver: true, editar: true },
-        seguridad: { ver: false, editar: false }
+        seguridad: { ver: false, editar: false },
+        ia: {
+          accesoTotalTablas: nuevoRol === 'Dirección',
+          tablasPermitidas: [],
+          busquedaEnLinea: false
+        }
       }
     }
 
@@ -570,6 +679,144 @@ export default function ModalConfiguracion({
                         </tbody>
                       </table>
                     </div>
+
+                    {/* SECCIÓN DE PERMISOS DE INTELIGENCIA ARTIFICIAL (TABLAS SQL Y BÚSQUEDA EN LÍNEA) */}
+                    {(() => {
+                      const iaPerm = perfilActivo.permisos?.ia || {
+                        accesoTotalTablas: true,
+                        tablasPermitidas: [],
+                        busquedaEnLinea: false
+                      }
+                      const accesoTotal = iaPerm.accesoTotalTablas !== false
+                      const tablasSeleccionadas = Array.isArray(iaPerm.tablasPermitidas) ? iaPerm.tablasPermitidas : []
+
+                      return (
+                        <div style={{ border: '1px solid var(--border-light)', borderRadius: '12px', padding: '16px', backgroundColor: '#f8fafc', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+                          <div>
+                            <h4 style={{ fontSize: '14px', margin: '0 0 2px 0', color: '#1d1d1f' }}>
+                              🤖 Permisos del Asistente IA para &ldquo;{perfilActivo.nombre}&rdquo;
+                            </h4>
+                            <p style={{ fontSize: '11.5px', color: '#6b7280', margin: 0 }}>
+                              Controla qué tablas de Azure SQL puede leer la IA para este usuario y si puede responder con conocimiento externo.
+                            </p>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                            <div style={{ backgroundColor: '#ffffff', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#1d1d1f' }}>
+                                  🗄️ Acceso a todas las tablas SQL
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#86868b' }}>
+                                  {accesoTotal ? 'Puede consultar toda la base de datos' : `Restringido a ${tablasSeleccionadas.length} tabla(s)`}
+                                </div>
+                              </div>
+                              <label className="apple-switch">
+                                <input
+                                  type="checkbox"
+                                  checked={accesoTotal}
+                                  onChange={() => toggleConfigIA('accesoTotalTablas')}
+                                  disabled={!autorizadoParaEditarPermisos}
+                                />
+                                <span className="apple-slider blue" />
+                              </label>
+                            </div>
+
+                            <div style={{ backgroundColor: '#ffffff', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border-light)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                              <div>
+                                <div style={{ fontWeight: 600, fontSize: '12.5px', color: '#1d1d1f' }}>
+                                  🌐 Permitir búsqueda / respuestas externas
+                                </div>
+                                <div style={{ fontSize: '11px', color: '#86868b' }}>
+                                  {iaPerm.busquedaEnLinea ? 'Puede usar conocimiento en línea además del ERP' : 'Solo datos internos de Azure SQL'}
+                                </div>
+                              </div>
+                              <label className="apple-switch">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(iaPerm.busquedaEnLinea)}
+                                  onChange={() => toggleConfigIA('busquedaEnLinea')}
+                                  disabled={!autorizadoParaEditarPermisos}
+                                />
+                                <span className="apple-slider" />
+                              </label>
+                            </div>
+                          </div>
+
+                          {!accesoTotal && (
+                            <div style={{ backgroundColor: '#ffffff', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border-light)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+                                <span className="pro-label" style={{ margin: 0 }}>
+                                  Tablas autorizadas en Azure SQL ({tablasSeleccionadas.length} / {tablasBD.length})
+                                </span>
+                                {autorizadoParaEditarPermisos && tablasBD.length > 0 && (
+                                  <div style={{ display: 'flex', gap: '6px' }}>
+                                    <button
+                                      type="button"
+                                      disabled={guardandoDB}
+                                      onClick={() => aplicarLoteTablasIA(true)}
+                                      className="pro-btn pro-btn-secondary pro-btn-sm"
+                                      style={{ fontSize: '11px', padding: '3px 8px' }}
+                                    >
+                                      Seleccionar todas
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={guardandoDB}
+                                      onClick={() => aplicarLoteTablasIA(false)}
+                                      className="pro-btn pro-btn-secondary pro-btn-sm"
+                                      style={{ fontSize: '11px', padding: '3px 8px' }}
+                                    >
+                                      Ninguna
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+
+                              {cargandoTablas ? (
+                                <div style={{ fontSize: '12px', color: '#6b7280' }}>Cargando tablas de Azure SQL...</div>
+                              ) : tablasBD.length === 0 ? (
+                                <div style={{ fontSize: '12px', color: '#b45309' }}>
+                                  No se pudo obtener la lista de tablas desde el servidor MCP (`{CHAT_API_URL}`).
+                                </div>
+                              ) : (
+                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: '8px' }}>
+                                  {tablasBD.map((tabla) => {
+                                    const marcada = tablasSeleccionadas.includes(tabla)
+                                    return (
+                                      <label
+                                        key={tabla}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          gap: '8px',
+                                          padding: '6px 10px',
+                                          borderRadius: '8px',
+                                          border: `1px solid ${marcada ? '#0071e3' : 'var(--border-light)'}`,
+                                          backgroundColor: marcada ? 'rgba(0, 113, 227, 0.06)' : '#fafafa',
+                                          cursor: autorizadoParaEditarPermisos ? 'pointer' : 'not-allowed',
+                                          fontSize: '12px'
+                                        }}
+                                      >
+                                        <input
+                                          type="checkbox"
+                                          checked={marcada}
+                                          disabled={!autorizadoParaEditarPermisos}
+                                          onChange={() => toggleTablaIA(tabla)}
+                                        />
+                                        <span className="pro-mono" style={{ fontWeight: marcada ? 700 : 500, color: '#1d1d1f', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                          {tabla}
+                                        </span>
+                                      </label>
+                                    )
+                                  })}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </div>
                 )}
               </div>

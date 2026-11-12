@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import sql from 'mssql';
+import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -44,22 +45,28 @@ const getDbPool = async () => {
 };
 
 // ==========================================
-// 2. CONFIGURACIÓN DE GEMINI API (FREE TIER OPTIMIZADO)
+// 2. CONFIGURACIÓN DE PROVEEDORES IA (GEMINI & DEEPSEEK)
 // ==========================================
 const apiKeyGemini = (process.env.GEMINI_API_KEY || '').trim();
 const geminiModel = (process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim();
 
+const apiKeyDeepSeek = (process.env.DEEPSEEK_API_KEY || '').trim();
+const deepseekModel = (process.env.DEEPSEEK_MODEL || 'deepseek-chat').trim();
+const deepseekClient = apiKeyDeepSeek
+    ? new OpenAI({ baseURL: 'https://api.deepseek.com', apiKey: apiKeyDeepSeek })
+    : null;
+
 // ==========================================
-// 3. CACHÉ DE ESQUEMA SQL (AHORRA LLAMADAS EN CAPA FREE)
+// 3. CACHÉ DE ESQUEMA SQL Y PERMISOS RBAC DE IA
 // ==========================================
-let esquemaCache = null;
+let esquemaMapCache = null;
 let esquemaCacheTimestamp = 0;
 const ESQUEMA_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutos
 
-async function obtenerResumenEsquemaEnMemoria() {
+async function obtenerEsquemaMapEnMemoria() {
     const ahora = Date.now();
-    if (esquemaCache && ahora - esquemaCacheTimestamp < ESQUEMA_CACHE_TTL_MS) {
-        return esquemaCache;
+    if (esquemaMapCache && ahora - esquemaCacheTimestamp < ESQUEMA_CACHE_TTL_MS) {
+        return esquemaMapCache;
     }
 
     try {
@@ -84,17 +91,114 @@ async function obtenerResumenEsquemaEnMemoria() {
             tablasMap[row.Tabla].push(`${row.Columna} (${row.TipoDato})`);
         }
 
-        const lineas = Object.entries(tablasMap).map(
-            ([tabla, cols]) => `- ${tabla}: ${cols.join(', ')}`
-        );
-
-        esquemaCache = lineas.join('\n');
+        esquemaMapCache = tablasMap;
         esquemaCacheTimestamp = ahora;
-        return esquemaCache;
+        return esquemaMapCache;
     } catch (err) {
         console.warn('⚠️ No se pudo precargar el esquema SQL en caché:', err.message);
         return null;
     }
+}
+
+async function obtenerResumenEsquemaEnMemoria(permisosIA = null) {
+    const tablasMap = await obtenerEsquemaMapEnMemoria();
+    if (!tablasMap) return null;
+
+    const permitidasSet =
+        permisosIA && !permisosIA.accesoTotalTablas
+            ? new Set((permisosIA.tablasPermitidas || []).map((t) => String(t).toLowerCase()))
+            : null;
+
+    const lineas = Object.entries(tablasMap)
+        .filter(([tabla]) => !permitidasSet || permitidasSet.has(tabla.toLowerCase()))
+        .map(([tabla, cols]) => `- ${tabla}: ${cols.join(', ')}`);
+
+    return lineas.join('\n');
+}
+
+async function obtenerPermisosIAUsuario({ userId, usuario, esMaestro }) {
+    const permisosPorDefecto = {
+        accesoTotalTablas: true,
+        tablasPermitidas: [],
+        busquedaEnLinea: false,
+    };
+
+    try {
+        const pool = await getDbPool();
+        let result = null;
+
+        if (userId !== null && userId !== undefined && !Number.isNaN(Number(userId))) {
+            result = await pool
+                .request()
+                .input('Id', sql.Int, Number(userId))
+                .query('SELECT TOP 1 Id, EsMaestro, PermisosJSON FROM Usuarios WHERE Id = @Id');
+        } else if (usuario) {
+            result = await pool
+                .request()
+                .input('Usuario', sql.NVarChar, String(usuario).trim())
+                .query('SELECT TOP 1 Id, EsMaestro, PermisosJSON FROM Usuarios WHERE LOWER(Usuario) = LOWER(@Usuario)');
+        }
+
+        const fila = result?.recordset?.[0];
+        if (!fila) {
+            return esMaestro ? { ...permisosPorDefecto, busquedaEnLinea: true } : permisosPorDefecto;
+        }
+
+        if (fila.EsMaestro) {
+            return { accesoTotalTablas: true, tablasPermitidas: [], busquedaEnLinea: true };
+        }
+
+        const permisosObj = JSON.parse(fila.PermisosJSON || '{}');
+        const ia = permisosObj?.ia || {};
+
+        return {
+            accesoTotalTablas: ia.accesoTotalTablas !== false,
+            tablasPermitidas: Array.isArray(ia.tablasPermitidas) ? ia.tablasPermitidas : [],
+            busquedaEnLinea: Boolean(ia.busquedaEnLinea),
+        };
+    } catch (err) {
+        console.warn('⚠️ No se pudieron leer permisos IA desde SQL, usando respaldo:', err.message);
+        return permisosPorDefecto;
+    }
+}
+
+function validarTablasEnConsultaSQL(sqlQuery, tablasPermitidas = []) {
+    if (/\b(INFORMATION_SCHEMA|SYSOBJECTS|SYSCOLUMNS|SYS\.)\b/i.test(sqlQuery)) {
+        return {
+            valido: false,
+            error: 'Acceso bloqueado: Tu perfil tiene restricciones de tablas y no puede consultar vistas del sistema.',
+        };
+    }
+
+    // Extraemos nombres de CTEs (WITH nombre AS (...)) para no confundirlos con tablas físicas
+    const cteNames = new Set();
+    const cteRegex = /\b(?:WITH|,)\s+([a-zA-Z0-9_[\]]+)\s+AS\s*\(/gi;
+    let cteMatch;
+    while ((cteMatch = cteRegex.exec(sqlQuery)) !== null) {
+        cteNames.add(cteMatch[1].replace(/[[\]]/g, '').toLowerCase());
+    }
+
+    const permitidasSet = new Set(tablasPermitidas.map((t) => String(t).toLowerCase()));
+    const tablaRegex = /\b(?:FROM|JOIN)\s+([a-zA-Z0-9_.\[\]]+)/gi;
+    let match;
+    while ((match = tablaRegex.exec(sqlQuery)) !== null) {
+        let nombreTabla = match[1].trim();
+        if (nombreTabla.startsWith('(')) continue;
+        // Quitamos esquema (dbo.) y corchetes ([Tabla])
+        const partes = nombreTabla.split('.');
+        const tablaLimpia = partes[partes.length - 1].replace(/[[\]]/g, '');
+        const tablaLower = tablaLimpia.toLowerCase();
+
+        if (cteNames.has(tablaLower)) continue;
+        if (!permitidasSet.has(tablaLower)) {
+            return {
+                valido: false,
+                error: `Acceso denegado: Tu perfil no tiene permiso para consultar la tabla "${tablaLimpia}".`,
+            };
+        }
+    }
+
+    return { valido: true };
 }
 
 // ==========================================
@@ -139,7 +243,17 @@ const geminiFunctionDeclarations = mcpTools.map((tool) => ({
     parameters: tool.inputSchema,
 }));
 
-async function executeMcpTool(name, args) {
+// Declaración de herramientas en formato OpenAI / DeepSeek
+const openAiTools = mcpTools.map((tool) => ({
+    type: 'function',
+    function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+    },
+}));
+
+async function executeMcpTool(name, args, permisosIA = null) {
     try {
         const pool = await getDbPool();
 
@@ -164,7 +278,14 @@ async function executeMcpTool(name, args) {
             query += ` ORDER BY t.TABLE_NAME, c.ORDINAL_POSITION`;
 
             const result = await request.query(query);
-            return JSON.stringify(result.recordset);
+            let filas = result.recordset;
+
+            if (permisosIA && !permisosIA.accesoTotalTablas) {
+                const permitidasSet = new Set((permisosIA.tablasPermitidas || []).map((t) => String(t).toLowerCase()));
+                filas = filas.filter((r) => permitidasSet.has(String(r.Tabla).toLowerCase()));
+            }
+
+            return JSON.stringify(filas);
         }
 
         if (name === 'ejecutar_consulta_sql') {
@@ -176,6 +297,13 @@ async function executeMcpTool(name, args) {
                 return JSON.stringify({
                     error: 'Operación bloqueada por seguridad: Solo se permiten consultas de lectura (SELECT).',
                 });
+            }
+
+            if (permisosIA && !permisosIA.accesoTotalTablas) {
+                const validacion = validarTablasEnConsultaSQL(sqlQuery, permisosIA.tablasPermitidas || []);
+                if (!validacion.valido) {
+                    return JSON.stringify({ error: validacion.error });
+                }
             }
 
             try {
@@ -317,13 +445,198 @@ mcpServer.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 // ==========================================
-// 7. ENDPOINTS DE SALUD Y CHATBOT DEL FRONTEND
+// 7. EJECUTORES DE CHAT (GEMINI & DEEPSEEK)
+// ==========================================
+async function ejecutarChatConGemini({ systemPrompt, history, message, permisosIA }) {
+    const contents = [];
+    for (const item of history) {
+        if (!item?.content) continue;
+        const role = item.role === 'assistant' || item.role === 'model' ? 'model' : 'user';
+        contents.push({
+            role,
+            parts: [{ text: String(item.content) }],
+        });
+    }
+
+    contents.push({
+        role: 'user',
+        parts: [{ text: String(message) }],
+    });
+
+    let iterations = 0;
+    const MAX_ITERATIONS = 3;
+    let totalTokensAcumulados = 0;
+    let modeloActivoEnChat = geminiModel;
+
+    while (iterations < MAX_ITERATIONS) {
+        iterations++;
+        const allowTools = iterations < MAX_ITERATIONS;
+        const { data: responseData, modeloUsado } = await llamarGeminiGenerateContent({
+            systemPrompt,
+            contents,
+            allowTools,
+            modeloPreferido: modeloActivoEnChat,
+        });
+        modeloActivoEnChat = modeloUsado;
+
+        if (responseData?.usageMetadata?.totalTokenCount) {
+            totalTokensAcumulados += responseData.usageMetadata.totalTokenCount;
+        }
+
+        const candidate = responseData?.candidates?.[0];
+        const parts = candidate?.content?.parts || [];
+
+        if (!parts.length) {
+            const razonBloqueo = candidate?.finishReason || responseData?.promptFeedback?.blockReason || 'Respuesta vacía del modelo';
+            return {
+                reply: `No se pudo generar respuesta en este intento (${razonBloqueo}). Intenta reformular tu consulta.`,
+                provider: 'gemini',
+                model: modeloActivoEnChat,
+                iterations_used: iterations,
+                usage: { total_tokens: totalTokensAcumulados },
+            };
+        }
+
+        contents.push({ role: 'model', parts });
+
+        const functionCalls = parts.filter((p) => p.functionCall);
+        if (functionCalls.length === 0) {
+            const replyText = parts
+                .filter((p) => typeof p.text === 'string' && !p.thought)
+                .map((p) => p.text)
+                .join('\n')
+                .trim();
+
+            return {
+                reply: replyText || parts.map((p) => p.text || '').join('\n').trim() || 'Consulta completada.',
+                provider: 'gemini',
+                model: modeloActivoEnChat,
+                iterations_used: iterations,
+                usage: { total_tokens: totalTokensAcumulados },
+            };
+        }
+
+        const responseParts = [];
+        for (const part of functionCalls) {
+            const { name: toolName, args: toolArgs } = part.functionCall;
+            console.log(`[MCP Tool Execution - Gemini] -> ${toolName}:`, toolArgs);
+
+            const rawResult = await executeMcpTool(toolName, toolArgs || {}, permisosIA);
+            let parsedResult;
+            try {
+                parsedResult = JSON.parse(rawResult);
+            } catch {
+                parsedResult = { resultado: rawResult };
+            }
+
+            responseParts.push({
+                functionResponse: {
+                    name: toolName,
+                    response: Array.isArray(parsedResult) ? { registros: parsedResult } : parsedResult,
+                },
+            });
+        }
+
+        contents.push({ role: 'user', parts: responseParts });
+    }
+
+    return {
+        reply: 'Se alcanzó el límite de pasos para esta consulta. Por favor intenta hacer una pregunta más específica.',
+        provider: 'gemini',
+        model: modeloActivoEnChat,
+        iterations_used: iterations,
+        usage: { total_tokens: totalTokensAcumulados },
+    };
+}
+
+async function ejecutarChatConDeepSeek({ systemPrompt, history, message, permisosIA }) {
+    if (!deepseekClient) {
+        throw new Error('Falta configurar la variable de entorno DEEPSEEK_API_KEY en el servidor.');
+    }
+
+    const messages = [{ role: 'system', content: systemPrompt }];
+    for (const item of history) {
+        if (!item?.content) continue;
+        messages.push({
+            role: item.role === 'assistant' || item.role === 'model' ? 'assistant' : 'user',
+            content: String(item.content),
+        });
+    }
+    messages.push({ role: 'user', content: String(message) });
+
+    let iterations = 0;
+    const MAX_ITERATIONS = 4;
+    let totalTokensAcumulados = 0;
+    let cacheHitsAcumulados = 0;
+
+    while (iterations < MAX_ITERATIONS) {
+        iterations++;
+        const allowTools = iterations < MAX_ITERATIONS;
+
+        const response = await deepseekClient.chat.completions.create({
+            model: deepseekModel,
+            messages,
+            ...(allowTools ? { tools: openAiTools, tool_choice: 'auto' } : {}),
+            temperature: 0.1,
+        });
+
+        if (response?.usage?.total_tokens) {
+            totalTokensAcumulados += response.usage.total_tokens;
+        }
+        if (response?.usage?.prompt_cache_hit_tokens) {
+            cacheHitsAcumulados += response.usage.prompt_cache_hit_tokens;
+        }
+
+        const assistantMessage = response.choices[0].message;
+        messages.push(assistantMessage);
+
+        if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
+            return {
+                reply: assistantMessage.content || 'Consulta completada.',
+                provider: 'deepseek',
+                model: deepseekModel,
+                iterations_used: iterations,
+                usage: {
+                    total_tokens: totalTokensAcumulados,
+                    prompt_cache_hit_tokens: cacheHitsAcumulados,
+                },
+            };
+        }
+
+        for (const toolCall of assistantMessage.tool_calls) {
+            const toolName = toolCall.function.name;
+            const toolArgs = JSON.parse(toolCall.function.arguments || '{}');
+            console.log(`[MCP Tool Execution - DeepSeek] -> ${toolName}:`, toolArgs);
+
+            const toolResult = await executeMcpTool(toolName, toolArgs, permisosIA);
+            messages.push({
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: toolResult,
+            });
+        }
+    }
+
+    return {
+        reply: 'Se alcanzó el límite de pasos para esta consulta. Por favor intenta hacer una pregunta más específica.',
+        provider: 'deepseek',
+        model: deepseekModel,
+        iterations_used: iterations,
+        usage: {
+            total_tokens: totalTokensAcumulados,
+            prompt_cache_hit_tokens: cacheHitsAcumulados,
+        },
+    };
+}
+
+// ==========================================
+// 8. ENDPOINTS DE SALUD Y CHATBOT DEL FRONTEND
 // ==========================================
 app.get('/', (req, res) => {
     res.json({
         status: 'online',
-        service: 'Protemec Intelligence - Servidor MCP + Gemini Flash + Azure SQL',
-        model: geminiModel,
+        service: 'Protemec Intelligence - Servidor MCP (Gemini + DeepSeek) + Azure SQL',
+        models: { gemini: geminiModel, deepseek: deepseekModel },
         endpoints: ['POST /api/chat', 'GET /api/health'],
     });
 });
@@ -337,149 +650,81 @@ app.get('/api/health', async (req, res) => {
             database: 'connected',
             llm: geminiModel,
             apiKeyConfigured: Boolean(apiKeyGemini),
+            providers: {
+                gemini: { model: geminiModel, configured: Boolean(apiKeyGemini) },
+                deepseek: { model: deepseekModel, configured: Boolean(apiKeyDeepSeek) },
+            },
         });
     } catch (err) {
         res.status(500).json({ status: 'error', database: 'disconnected', details: err.message });
     }
 });
 
+app.get('/api/tablas', async (req, res) => {
+    try {
+        const tablasMap = await obtenerEsquemaMapEnMemoria();
+        const tablas = tablasMap ? Object.keys(tablasMap) : [];
+        res.json({ tablas });
+    } catch (err) {
+        res.status(500).json({ error: 'No se pudieron obtener las tablas de Azure SQL.', details: err.message });
+    }
+});
+
 app.post('/api/chat', async (req, res) => {
     try {
-        const { message, history = [] } = req.body;
+        const { message, history = [], provider = 'gemini', userId = null, usuario = null, esMaestro = false } = req.body;
 
         if (!message) {
             return res.status(400).json({ error: 'El mensaje es obligatorio.' });
         }
 
-        // Precargamos el esquema desde caché en RAM (0 llamadas extra a Gemini API)
-        const esquemaTexto = await obtenerResumenEsquemaEnMemoria();
+        const proveedorElegido = String(provider).toLowerCase() === 'deepseek' ? 'deepseek' : 'gemini';
+
+        // Obtenemos los permisos reales del usuario directamente desde Azure SQL
+        const permisosIA = await obtenerPermisosIAUsuario({ userId, usuario, esMaestro });
+
+        if (!permisosIA.accesoTotalTablas && (!permisosIA.tablasPermitidas || permisosIA.tablasPermitidas.length === 0) && !permisosIA.busquedaEnLinea) {
+            return res.json({
+                reply: '🔒 Tu perfil no tiene tablas autorizadas ni permiso de búsqueda externa en la IA. Solicita al administrador que asigne tus permisos en **Seguridad y Perfiles**.',
+                provider: proveedorElegido,
+                model: proveedorElegido === 'deepseek' ? deepseekModel : geminiModel,
+                iterations_used: 0,
+                usage: { total_tokens: 0 },
+            });
+        }
+
+        // Precargamos el esquema filtrado según las tablas autorizadas del usuario
+        const esquemaTexto = await obtenerResumenEsquemaEnMemoria(permisosIA);
+
+        const reglaAlcance = permisosIA.busquedaEnLinea
+            ? 'ALCANCE HÍBRIDO: Puedes consultar los datos internos del ERP en Azure SQL y también responder dudas generales, técnicas o de conocimiento externo/en línea cuando el usuario lo solicite.'
+            : 'MODO ESTRICTO SOLO DATOS DEL ERP: Responde ÚNICAMENTE con base en los datos reales consultados en Azure SQL mediante herramientas MCP. NO respondas preguntas de conocimiento general, noticias ni información externa que no provenga de la base de datos autorizada.';
+
+        const reglaTablas = permisosIA.accesoTotalTablas
+            ? 'Tienes acceso de lectura a todas las tablas del ERP listadas en el esquema.'
+            : `ACCESO RESTRINGIDO POR PERFIL: Solo puedes consultar estas tablas autorizadas: ${permisosIA.tablasPermitidas.join(', ')}. Nunca intentes consultar tablas fuera de esta lista.`;
 
         const systemPrompt = `Eres Protemec Intelligence, el analista de datos e inteligencia artificial integrado en el ERP de PROTEMEC.
 Tienes acceso directo en tiempo real a la base de datos Azure SQL mediante la herramienta 'ejecutar_consulta_sql'.
 
-${esquemaTexto ? `ESQUEMA ACTUAL DE TABLAS Y COLUMNAS EN AZURE SQL (YA CARGADO, NO LLAMES A obtener_esquema_bd A MENOS QUE FALTE ALGO):\n${esquemaTexto}\n` : ''}
+${esquemaTexto ? `ESQUEMA AUTORIZADO DE TABLAS Y COLUMNAS EN AZURE SQL:\n${esquemaTexto}\n` : 'No hay tablas autorizadas en este perfil.\n'}
 Reglas de operación:
-1. Usa directamente 'ejecutar_consulta_sql' con los nombres exactos de tablas y columnas del esquema anterior para ahorrar llamadas a la API.
-2. Usa sintaxis T-SQL de Microsoft SQL Server (usa TOP N, GETDATE(), DATEADD, ISNULL, etc., NUNCA uses LIMIT).
-3. Si un cálculo o cruce de datos se puede hacer en SQL (SUM, COUNT, AVG, GROUP BY), hazlo directamente en la consulta para ahorrar tokens y ser exacto.
-4. Analiza los datos obtenidos y entrega respuestas ejecutivas en español, claras, con métricas exactas en pesos mexicanos (MXN) cuando aplique, y bien estructuradas en Markdown (tablas o listas).`;
+1. ${reglaTablas}
+2. ${reglaAlcance}
+3. Usa directamente 'ejecutar_consulta_sql' con los nombres exactos de tablas y columnas del esquema anterior para ahorrar llamadas a la API.
+4. Usa sintaxis T-SQL de Microsoft SQL Server (usa TOP N, GETDATE(), DATEADD, ISNULL, etc., NUNCA uses LIMIT).
+5. Si un cálculo o cruce de datos se puede hacer en SQL (SUM, COUNT, AVG, GROUP BY), hazlo directamente en la consulta para ahorrar tokens y ser exacto.
+6. Analiza los datos obtenidos y entrega respuestas ejecutivas en español, claras, con métricas exactas en pesos mexicanos (MXN) cuando aplique, y bien estructuradas en Markdown (tablas o listas).`;
 
-        // Convertimos el historial al formato nativo de Gemini (user / model)
-        const contents = [];
-        for (const item of history) {
-            if (!item?.content) continue;
-            const role = item.role === 'assistant' || item.role === 'model' ? 'model' : 'user';
-            contents.push({
-                role,
-                parts: [{ text: String(item.content) }],
-            });
-        }
+        const resultado = proveedorElegido === 'deepseek'
+            ? await ejecutarChatConDeepSeek({ systemPrompt, history, message, permisosIA })
+            : await ejecutarChatConGemini({ systemPrompt, history, message, permisosIA });
 
-        contents.push({
-            role: 'user',
-            parts: [{ text: String(message) }],
-        });
-
-        let iterations = 0;
-        // Máximo 2 rondas de herramientas + 1 respuesta final para cuidar la cuota gratuita (Free Tier)
-        const MAX_ITERATIONS = 3;
-        let totalTokensAcumulados = 0;
-        let modeloActivoEnChat = geminiModel;
-
-        while (iterations < MAX_ITERATIONS) {
-            iterations++;
-
-            // En la última iteración deshabilitamos herramientas para forzar respuesta de texto final
-            const allowTools = iterations < MAX_ITERATIONS;
-            const { data: responseData, modeloUsado } = await llamarGeminiGenerateContent({
-                systemPrompt,
-                contents,
-                allowTools,
-                modeloPreferido: modeloActivoEnChat,
-            });
-            modeloActivoEnChat = modeloUsado;
-
-            if (responseData?.usageMetadata?.totalTokenCount) {
-                totalTokensAcumulados += responseData.usageMetadata.totalTokenCount;
-            }
-
-            const candidate = responseData?.candidates?.[0];
-            const modelContent = candidate?.content;
-            const parts = modelContent?.parts || [];
-
-            if (!parts.length) {
-                const razonBloqueo = candidate?.finishReason || responseData?.promptFeedback?.blockReason || 'Respuesta vacía del modelo';
-                return res.json({
-                    reply: `No se pudo generar respuesta en este intento (${razonBloqueo}). Intenta reformular tu consulta.`,
-                    model: modeloActivoEnChat,
-                    iterations_used: iterations,
-                    usage: { total_tokens: totalTokensAcumulados },
-                });
-            }
-
-            // Conservamos intacto el mensaje del modelo (incluyendo thoughtSignature en Gemini 2.5)
-            contents.push({
-                role: 'model',
-                parts,
-            });
-
-            // Buscamos si el modelo solicitó ejecutar alguna función/herramienta MCP
-            const functionCalls = parts.filter((p) => p.functionCall);
-
-            if (functionCalls.length === 0) {
-                const replyText = parts
-                    .filter((p) => typeof p.text === 'string' && !p.thought)
-                    .map((p) => p.text)
-                    .join('\n')
-                    .trim();
-
-                return res.json({
-                    reply: replyText || parts.map((p) => p.text || '').join('\n').trim() || 'Consulta completada.',
-                    model: modeloActivoEnChat,
-                    iterations_used: iterations,
-                    usage: { total_tokens: totalTokensAcumulados },
-                });
-            }
-
-            // Ejecutamos las herramientas solicitadas y agregamos sus functionResponse
-            const responseParts = [];
-            for (const part of functionCalls) {
-                const { name: toolName, args: toolArgs } = part.functionCall;
-                console.log(`[MCP Tool Execution] -> ${toolName}:`, toolArgs);
-
-                const rawResult = await executeMcpTool(toolName, toolArgs || {});
-                let parsedResult;
-                try {
-                    parsedResult = JSON.parse(rawResult);
-                } catch {
-                    parsedResult = { resultado: rawResult };
-                }
-
-                responseParts.push({
-                    functionResponse: {
-                        name: toolName,
-                        response: Array.isArray(parsedResult)
-                            ? { registros: parsedResult }
-                            : parsedResult,
-                    },
-                });
-            }
-
-            contents.push({
-                role: 'user',
-                parts: responseParts,
-            });
-        }
-
-        return res.json({
-            reply: 'Se alcanzó el límite de pasos para esta consulta. Por favor intenta hacer una pregunta más específica.',
-            iterations_used: iterations,
-            usage: { total_tokens: totalTokensAcumulados },
-        });
+        return res.json(resultado);
     } catch (error) {
         console.error('Error en /api/chat:', error.message);
         res.status(500).json({
-            error: 'Error procesando la solicitud con Gemini y Azure SQL.',
+            error: 'Error procesando la solicitud con el modelo IA y Azure SQL.',
             details: error.message,
         });
     }
@@ -488,5 +733,5 @@ Reglas de operación:
 // En local usa CHAT_PORT (3001) para no chocar con server.js (3000); en Azure App Service usa process.env.PORT
 const PORT = process.env.CHAT_PORT || (process.env.WEBSITE_SITE_NAME ? process.env.PORT : 3001) || 3001;
 app.listen(PORT, () => {
-    console.log(`✅ Servidor ERP + MCP + Gemini (${geminiModel}) activo en http://localhost:${PORT}`);
+    console.log(`✅ Servidor ERP + MCP (Gemini: ${geminiModel} | DeepSeek: ${deepseekModel}) activo en http://localhost:${PORT}`);
 });

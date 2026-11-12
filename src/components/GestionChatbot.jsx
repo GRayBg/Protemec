@@ -163,6 +163,7 @@ export default function GestionChatbot({
   ])
   const [entrada, setEntrada] = useState('')
   const [pensando, setPensando] = useState(false)
+  const [proveedorIA, setProveedorIA] = useState('gemini') // 'gemini' | 'deepseek'
   const [urlServidorChat, setUrlServidorChat] = useState(() => {
     const esEntornoLocal =
       typeof window !== 'undefined' &&
@@ -216,7 +217,11 @@ export default function GestionChatbot({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: preguntaLimpia,
-          history: historialParaApi
+          history: historialParaApi,
+          provider: proveedorIA,
+          userId: usuarioActual?.id ?? null,
+          usuario: usuarioActual?.usuario ?? null,
+          esMaestro: Boolean(usuarioActual?.esMaestro)
         })
       })
 
@@ -234,6 +239,8 @@ export default function GestionChatbot({
           remitente: 'bot',
           texto: data.reply || 'Consulta completada sin texto de retorno.',
           meta: {
+            proveedor: data.provider || proveedorIA,
+            modelo: data.model || null,
             iteraciones: data.iterations_used || 1,
             tokensTotales: data.usage?.total_tokens || null,
             tokensCache: data.usage?.prompt_cache_hit_tokens || 0
@@ -243,14 +250,15 @@ export default function GestionChatbot({
     } catch (err) {
       console.error('Error en consulta del chatbot:', err)
       if (err.esErrorDeApi) {
+        const nombreMotor = proveedorIA === 'deepseek' ? 'DeepSeek' : 'Gemini API'
         if (mostrarToast) {
-          mostrarToast('Error temporal de Gemini API', 'alerta')
+          mostrarToast(`Error temporal de ${nombreMotor}`, 'alerta')
         }
         setMensajes((prev) => [
           ...prev,
           {
             remitente: 'bot',
-            texto: `⚠️ **Aviso de Gemini API:**\n\n${err.message}`,
+            texto: `⚠️ **Aviso de ${nombreMotor}:**\n\n${err.message}`,
             esError: true,
             reintentarPrompt: preguntaLimpia
           }
@@ -312,12 +320,12 @@ export default function GestionChatbot({
                   fontSize: '10.5px',
                   padding: '2px 7px',
                   borderRadius: '999px',
-                  backgroundColor: '#eef2ff',
-                  color: '#4f46e5',
+                  backgroundColor: proveedorIA === 'deepseek' ? '#ecfdf5' : '#eef2ff',
+                  color: proveedorIA === 'deepseek' ? '#047857' : '#4f46e5',
                   fontWeight: 700
                 }}
               >
-                Gemini Flash-Lite + Azure SQL MCP
+                {proveedorIA === 'deepseek' ? 'DeepSeek + Azure SQL MCP' : 'Gemini Flash-Lite + Azure SQL MCP'}
               </span>
             </div>
             <p style={{ fontSize: '12px', color: '#86868b', margin: 0 }}>
@@ -326,7 +334,29 @@ export default function GestionChatbot({
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {/* Switch de proveedor de IA (Gemini Lite vs DeepSeek) */}
+          <div className="pro-segmented" style={{ height: '30px' }} title="Cambiar modelo de Inteligencia Artificial">
+            <button
+              type="button"
+              disabled={pensando}
+              onClick={() => setProveedorIA('gemini')}
+              className={`pro-segmented-btn ${proveedorIA === 'gemini' ? 'active' : ''}`}
+              style={{ fontSize: '11.5px', padding: '0 10px' }}
+            >
+              ✨ Gemini Lite
+            </button>
+            <button
+              type="button"
+              disabled={pensando}
+              onClick={() => setProveedorIA('deepseek')}
+              className={`pro-segmented-btn ${proveedorIA === 'deepseek' ? 'active' : ''}`}
+              style={{ fontSize: '11.5px', padding: '0 10px' }}
+            >
+              🐋 DeepSeek
+            </button>
+          </div>
+
           {/* Selector rápido por si pruebas en Azure Cloud o en localhost:3001 */}
           <select
             value={urlServidorChat}
@@ -389,7 +419,10 @@ export default function GestionChatbot({
               {/* Metadatos de ejecución MCP y Tokens */}
               {!esUsuario && m.meta && (
                 <div style={estilos.metaFooter} className="pro-mono">
-                  <span>⚡ {m.meta.iteraciones} {m.meta.iteraciones === 1 ? 'paso' : 'pasos MCP (SQL)'}</span>
+                  {m.meta.modelo && (
+                    <span>{m.meta.proveedor === 'deepseek' ? '🐋' : '✨'} {m.meta.modelo}</span>
+                  )}
+                  <span>{m.meta.modelo ? '• ' : ''}⚡ {m.meta.iteraciones} {m.meta.iteraciones === 1 ? 'paso' : 'pasos MCP (SQL)'}</span>
                   {m.meta.tokensTotales && (
                     <span>• 📊 {m.meta.tokensTotales} tokens</span>
                   )}
@@ -406,7 +439,10 @@ export default function GestionChatbot({
           <div style={estilos.burbujaBot}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: '#4b5563', fontSize: '13px', fontWeight: 500 }}>
               <div style={estilos.miniSpinner} />
-              <span>Consultando tablas en Azure SQL mediante MCP y analizando con Gemini Flash-Lite...</span>
+              <span>
+                Consultando tablas en Azure SQL mediante MCP y analizando con{' '}
+                {proveedorIA === 'deepseek' ? 'DeepSeek' : 'Gemini Flash-Lite'}...
+              </span>
             </div>
           </div>
         )}

@@ -1417,6 +1417,7 @@ export default function App() {
           abierto={modalConfigAbierto}
           alCerrar={() => setModalConfigAbierto(false)}
           API_URL={API_URL}
+          CHAT_API_URL={CHAT_API_URL}
           perfilesUsuarios={perfilesUsuarios}
           setPerfilesUsuarios={setPerfilesUsuarios}
           credencialesMaestras={credencialesMaestras}
