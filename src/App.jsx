@@ -1,17 +1,19 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from 'react'
 import { createPortal } from 'react-dom'
-import VistaConsulta from './components/VistaConsulta'
 import FormularioCompra from './components/FormularioCompra'
-import GestionClientes from './components/GestionClientes'
-import GestionProyectos from './components/GestionProyectos'
-import GestionIngenieria from './components/GestionIngenieria'
-import GestionKanban from './components/GestionKanban'
-import GestionAlmacenInventario from './components/GestionAlmacenInventario'
-import GestionAlmacen3D from './components/GestionAlmacen3D'
-import GestionRH from './components/GestionRH'
-import GestionGerencia from './components/GestionGerencia'
-import GestionChatbot from './components/GestionChatbot'
 import ModalConfiguracion from './components/ModalConfiguracion'
+
+const VistaConsulta = lazy(() => import('./components/VistaConsulta'))
+const GestionClientes = lazy(() => import('./components/GestionClientes'))
+const GestionProyectos = lazy(() => import('./components/GestionProyectos'))
+const GestionIngenieria = lazy(() => import('./components/GestionIngenieria'))
+const GestionKanban = lazy(() => import('./components/GestionKanban'))
+const GestionProduccion = lazy(() => import('./components/GestionProduccion'))
+const GestionAlmacenInventario = lazy(() => import('./components/GestionAlmacenInventario'))
+const GestionAlmacen3D = lazy(() => import('./components/GestionAlmacen3D'))
+const GestionRH = lazy(() => import('./components/GestionRH'))
+const GestionGerencia = lazy(() => import('./components/GestionGerencia'))
+const GestionChatbot = lazy(() => import('./components/GestionChatbot'))
 
 function normalizarUrlConProtocolo(url, fallback) {
   const valor = String(url || fallback || '').trim().replace(/\/+$/, '')
@@ -45,6 +47,7 @@ const PERFIL_MAESTRO_TOTAL = {
     clientes: { ver: true, editar: true },
     ingenieria: { ver: true, editar: true },
     kanban: { ver: true, editar: true },
+    produccion: { ver: true, editar: true },
     almacen: { ver: true, editar: true },
     rh: { ver: true, editar: true },
     chatbot: { ver: true, editar: true },
@@ -161,6 +164,7 @@ export default function App() {
       return null
     }
   })
+  const [bienvenidaNombre, setBienvenidaNombre] = useState('')
 
   // Estados de la Pantalla de Login
   const [modoLogin, setModoLogin] = useState('maestro') // 'entra' | 'maestro'
@@ -213,10 +217,33 @@ export default function App() {
   )
 
   // Navegación Principal
-  const [moduloActivo, setModuloActivo] = useState('compras')
+  const [moduloSeleccionado, setModuloActivo] = useState('compras')
   const [sidebarColapsado, setSidebarColapsado] = useState(() => window.innerWidth < 1280)
-  const [subVistaIngenieria, setSubVistaIngenieria] = useState('explorador')
+  const [subVistaIngSeleccionada, setSubVistaIngenieria] = useState('explorador')
   const [subVistaAlmacen, setSubVistaAlmacen] = useState('inventario')
+
+  const moduloActivo = useMemo(() => {
+    if (!usuarioConPermisosActualizados || usuarioConPermisosActualizados.esMaestro) {
+      return moduloSeleccionado
+    }
+    if (usuarioConPermisosActualizados.permisos?.[moduloSeleccionado]?.ver === true) {
+      return moduloSeleccionado
+    }
+    return (
+      [
+        'gerencia',
+        'compras',
+        'proyectos',
+        'clientes',
+        'ingenieria',
+        'kanban',
+        'produccion',
+        'almacen',
+        'rh',
+        'chatbot'
+      ].find((k) => usuarioConPermisosActualizados.permisos?.[k]?.ver === true) || moduloSeleccionado
+    )
+  }, [usuarioConPermisosActualizados, moduloSeleccionado])
 
   // Estados de Datos Globales (Azure SQL) + Trigger de Sincronización Global
   const [compras, setCompras] = useState([])
@@ -256,30 +283,10 @@ export default function App() {
     usuarioConPermisosActualizados?.esMaestro || permisosModuloActual.editar === true
   )
 
-  useEffect(() => {
-    if (moduloActivo === 'ingenieria' && !puedeEditarModuloActual && subVistaIngenieria === 'nuevo') {
-      setSubVistaIngenieria('explorador')
-    }
-  }, [moduloActivo, puedeEditarModuloActual, subVistaIngenieria])
-
-  useEffect(() => {
-    if (!usuarioConPermisosActualizados || usuarioConPermisosActualizados.esMaestro) return
-    const puedeVerActual = usuarioConPermisosActualizados.permisos?.[moduloActivo]?.ver === true
-    if (!puedeVerActual) {
-      const primeroAutorizado = [
-        'gerencia',
-        'compras',
-        'proyectos',
-        'clientes',
-        'ingenieria',
-        'kanban',
-        'almacen',
-        'rh',
-        'chatbot'
-      ].find((k) => usuarioConPermisosActualizados.permisos?.[k]?.ver === true)
-      if (primeroAutorizado) setModuloActivo(primeroAutorizado)
-    }
-  }, [usuarioConPermisosActualizados, moduloActivo])
+  const subVistaIngenieria =
+    moduloActivo === 'ingenieria' && !puedeEditarModuloActual && subVistaIngSeleccionada === 'nuevo'
+      ? 'explorador'
+      : subVistaIngSeleccionada
 
   // CANDADO 1: Interceptor Global de Fetch para impedir POST/PUT/DELETE si no tiene permiso de edición
   const permisosRef = useRef(usuarioConPermisosActualizados)
@@ -313,7 +320,14 @@ export default function App() {
             urlStr.includes('/api/contactos')
           )
             moduloRequerido = 'clientes'
-          else if (urlStr.includes('/api/ingenieria')) moduloRequerido = moduloRef.current === 'kanban' ? 'kanban' : 'ingenieria'
+          else if (urlStr.includes('/api/ingenieria')) {
+            moduloRequerido =
+              moduloRef.current === 'kanban'
+                ? 'kanban'
+                : moduloRef.current === 'produccion'
+                  ? 'produccion'
+                  : 'ingenieria'
+          }
           else if (urlStr.includes('/api/inventario')) moduloRequerido = 'almacen'
           else if (urlStr.includes('/api/rh')) moduloRequerido = 'rh'
           else if (urlStr.includes('/api/usuarios')) moduloRequerido = 'seguridad'
@@ -321,7 +335,9 @@ export default function App() {
           const tienePermisoEdicion = Boolean(
             user.permisos?.[moduloRequerido]?.editar === true ||
             (moduloRequerido === 'ingenieria' && moduloRef.current === 'kanban' && user.permisos?.kanban?.editar === true) ||
-            (moduloRequerido === 'kanban' && user.permisos?.ingenieria?.editar === true)
+            (moduloRequerido === 'ingenieria' && moduloRef.current === 'produccion' && user.permisos?.produccion?.editar === true) ||
+            (moduloRequerido === 'kanban' && user.permisos?.ingenieria?.editar === true) ||
+            (moduloRequerido === 'produccion' && user.permisos?.ingenieria?.editar === true)
           )
           if (!tienePermisoEdicion) {
             mostrarToast('🔒 Modo Solo Lectura: No tienes permisos para guardar ni modificar datos', 'alerta')
@@ -417,22 +433,7 @@ export default function App() {
   const [archivoSeleccionado, setArchivoSeleccionado] = useState(null)
   const [guardando, setGuardando] = useState(false)
 
-  // FUNCIÓN GLOBAL DE SINCRONIZACIÓN PARA TODOS LOS MÓDULOS DEL ERP
-  const recargarDatos = useCallback(async (silencioso = false) => {
-    if (!silencioso) setSincronizando(true)
-    setSyncTrigger((prev) => prev + 1)
-    const ts = Date.now()
-
-    const fetchSeguro = async (endpoint) => {
-      try {
-        const res = await fetch(`${API_URL}${endpoint}?t=${ts}`, { cache: 'no-store' })
-        if (!res.ok) return null
-        return await res.json()
-      } catch {
-        return null
-      }
-    }
-
+  const aplicarDatosSincronizados = useCallback((resultados) => {
     const [
       datosCompras,
       datosClientes,
@@ -444,18 +445,7 @@ export default function App() {
       datosPersonalRH,
       datosKpis,
       datosMovimientos
-    ] = await Promise.all([
-      fetchSeguro('/api/datos'),
-      fetchSeguro('/api/clientes'),
-      fetchSeguro('/api/ubicaciones'),
-      fetchSeguro('/api/contactos'),
-      fetchSeguro('/api/proyectos'),
-      fetchSeguro('/api/ingenieria'),
-      fetchSeguro('/api/usuarios'),
-      fetchSeguro('/api/rh/personal'),
-      fetchSeguro('/api/rh/kpis'),
-      fetchSeguro('/api/inventario/movimientos')
-    ])
+    ] = resultados
 
     if (Array.isArray(datosCompras)) setCompras(datosCompras)
     if (Array.isArray(datosClientes)) setClientes(datosClientes)
@@ -477,15 +467,80 @@ export default function App() {
 
     setCargando(false)
     setSincronizando(false)
+  }, [])
+
+  // FUNCIÓN GLOBAL DE SINCRONIZACIÓN PARA TODOS LOS MÓDULOS DEL ERP
+  const recargarDatos = useCallback(async (silencioso = false) => {
+    if (!silencioso) setSincronizando(true)
+    setSyncTrigger((prev) => prev + 1)
+    const ts = Date.now()
+
+    const fetchSeguro = async (endpoint) => {
+      try {
+        const res = await fetch(`${API_URL}${endpoint}?t=${ts}`, { cache: 'no-store' })
+        if (!res.ok) return null
+        return await res.json()
+      } catch {
+        return null
+      }
+    }
+
+    const resultados = await Promise.all([
+      fetchSeguro('/api/datos'),
+      fetchSeguro('/api/clientes'),
+      fetchSeguro('/api/ubicaciones'),
+      fetchSeguro('/api/contactos'),
+      fetchSeguro('/api/proyectos'),
+      fetchSeguro('/api/ingenieria'),
+      fetchSeguro('/api/usuarios'),
+      fetchSeguro('/api/rh/personal'),
+      fetchSeguro('/api/rh/kpis'),
+      fetchSeguro('/api/inventario/movimientos')
+    ])
+
+    aplicarDatosSincronizados(resultados)
 
     if (!silencioso) {
       mostrarToast('Datos sincronizados con Azure SQL')
     }
-  }, [mostrarToast])
+  }, [aplicarDatosSincronizados, mostrarToast])
 
   useEffect(() => {
-    recargarDatos(true)
-  }, [recargarDatos])
+    const controller = new AbortController()
+    const ts = Date.now()
+
+    const fetchInicial = async (endpoint) => {
+      try {
+        const res = await fetch(`${API_URL}${endpoint}?t=${ts}`, {
+          cache: 'no-store',
+          signal: controller.signal
+        })
+        if (!res.ok) return null
+        return await res.json()
+      } catch {
+        return null
+      }
+    }
+
+    Promise.all([
+      fetchInicial('/api/datos'),
+      fetchInicial('/api/clientes'),
+      fetchInicial('/api/ubicaciones'),
+      fetchInicial('/api/contactos'),
+      fetchInicial('/api/proyectos'),
+      fetchInicial('/api/ingenieria'),
+      fetchInicial('/api/usuarios'),
+      fetchInicial('/api/rh/personal'),
+      fetchInicial('/api/rh/kpis'),
+      fetchInicial('/api/inventario/movimientos')
+    ]).then((resultados) => {
+      if (!controller.signal.aborted) {
+        aplicarDatosSincronizados(resultados)
+      }
+    })
+
+    return () => controller.abort()
+  }, [aplicarDatosSincronizados])
 
   const proveedoresUnicos = useMemo(
     () => [...new Set(compras.map((c) => c.Proveedor || c.proveedor).filter(Boolean))],
@@ -538,6 +593,8 @@ export default function App() {
       }
 
       setUsuarioActual(data)
+      setBienvenidaNombre(data?.nombre || data?.usuario || 'Usuario')
+      setTimeout(() => setBienvenidaNombre(''), 2400)
       setEmailEntraInput('')
       const primerModuloPermitido = [
         'gerencia',
@@ -546,6 +603,7 @@ export default function App() {
         'clientes',
         'ingenieria',
         'kanban',
+        'produccion',
         'almacen',
         'rh',
         'chatbot'
@@ -582,6 +640,8 @@ export default function App() {
       }
 
       setUsuarioActual(data)
+      setBienvenidaNombre(data?.nombre || data?.usuario || 'Usuario')
+      setTimeout(() => setBienvenidaNombre(''), 2400)
       setUserMaestroInput('')
       setPassMaestroInput('')
 
@@ -592,6 +652,7 @@ export default function App() {
         'clientes',
         'ingenieria',
         'kanban',
+        'produccion',
         'almacen',
         'rh',
         'chatbot'
@@ -892,6 +953,7 @@ export default function App() {
     { id: 'clientes', label: 'Clientes y Directorio', icono: '🏢', badge: clientes.length },
     { id: 'ingenieria', label: 'Ingeniería y BOM 3D', icono: '⚙️', badge: disenos.length },
     { id: 'kanban', label: 'Tablero Kanban', icono: '📋', badge: disenos.length },
+    { id: 'produccion', label: 'Producción (Gantt)', icono: '🏭', badge: disenos.length },
     { id: 'almacen', label: 'Almacén Digital 3D', icono: '📦', badge: null },
     { id: 'rh', label: 'Recursos Humanos', icono: '👥', badge: personalRH.filter((p) => p.Activo).length },
     { id: 'chatbot', label: 'Asistente IA', icono: '✨', badge: 'MCP' }
@@ -926,6 +988,10 @@ export default function App() {
       titulo: 'Tablero Kanban y Control de Avance',
       subtitulo: 'Flujo de trabajo por proyecto, registro de avance y vinculación con salidas de almacén'
     },
+    produccion: {
+      titulo: 'Seguimiento de Producción (Kanban, Gantt y MS Project)',
+      subtitulo: 'Control global por ensamble, etapas de proceso (Material, Maquinado, Pintado), planos PDF y calendario'
+    },
     almacen: {
       titulo: 'Gemelo Digital de Almacén e Inventario',
       subtitulo: 'Entradas de stock, salidas en grupo, préstamos a sitio y localización 3D'
@@ -935,7 +1001,7 @@ export default function App() {
       subtitulo: 'Expedientes de colaboradores de planta, estatus activo/baja y evaluación de KPIs'
     },
     chatbot: {
-      titulo: 'Protemec Intelligence (DeepSeek + MCP)',
+      titulo: 'Protemec Intelligence (Gemini + DeepSeek MCP)',
       subtitulo: 'Agente analítico conectado en tiempo real a Azure SQL Database'
     }
   }[moduloActivo] || { titulo: 'Protemec ERP', subtitulo: '' }
@@ -1084,6 +1150,34 @@ export default function App() {
         }}
       >
         <header style={estilos.topHeader}>
+          {bienvenidaNombre && (
+            <div className="iphone-welcome-overlay" aria-live="polite">
+              <div
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: '#86868b',
+                  marginBottom: '8px'
+                }}
+              >
+                Protemec ERP
+              </div>
+              <div
+                style={{
+                  fontSize: 'clamp(28px, 4vw, 44px)',
+                  fontWeight: 700,
+                  letterSpacing: '-0.02em',
+                  color: '#1d1d1f',
+                  textAlign: 'center',
+                  padding: '0 24px'
+                }}
+              >
+                Bienvenido, {bienvenidaNombre}
+              </div>
+            </div>
+          )}
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <h1 style={{ fontSize: '20px', fontWeight: 700, color: '#1d1d1f' }}>
@@ -1187,135 +1281,157 @@ export default function App() {
               </h3>
             </div>
           ) : (
-            <div key={`${moduloActivo}_${puedeEditarModuloActual}`} className="animate-view">
-              {/* 1. MÓDULO GERENCIA Y SEGUIMIENTO DE ALTO NIVEL */}
-              {moduloActivo === 'gerencia' && (
-                <GestionGerencia
-                  compras={compras}
-                  proyectos={proyectos}
-                  disenos={disenos}
-                  personalRH={personalRH}
-                  evaluacionesKPI={evaluacionesKPI}
-                  puedeEditar={puedeEditarModuloActual}
-                />
-              )}
-
-              {/* 2. MÓDULO DE COMPRAS */}
-              {moduloActivo === 'compras' && (
-                <VistaConsulta
-                  compras={compras}
-                  iniciarEdicion={puedeEditarModuloActual ? iniciarEdicion : () => mostrarToast('🔒 Modo Solo Lectura', 'alerta')}
-                  abrirModalNuevaCompra={abrirModalNuevaCompra}
-                  proveedoresUnicos={proveedoresUnicos}
-                  categoriasUnicas={categoriasUnicas}
-                  proyectosUnicos={proyectosUnicos}
-                  puedeEditar={puedeEditarModuloActual}
-                />
-              )}
-
-              {/* 3. MÓDULO DE PROYECTOS */}
-              {moduloActivo === 'proyectos' && (
-                <GestionProyectos
-                  proyectos={proyectos}
-                  clientes={clientes}
-                  ubicaciones={ubicaciones}
-                  API_URL={API_URL}
-                  recargarDatos={() => recargarDatos(true)}
-                  mostrarToast={mostrarToast}
-                  puedeEditar={puedeEditarModuloActual}
-                />
-              )}
-
-              {/* 4. MÓDULO DE CLIENTES (CRM) */}
-              {moduloActivo === 'clientes' && (
-                <GestionClientes
-                  clientes={clientes}
-                  ubicaciones={ubicaciones}
-                  contactos={contactos}
-                  API_URL={API_URL}
-                  recargarDatos={() => recargarDatos(true)}
-                  mostrarToast={mostrarToast}
-                  puedeEditar={puedeEditarModuloActual}
-                />
-              )}
-
-              {/* 5. MÓDULO DE INGENIERÍA 3D */}
-              {moduloActivo === 'ingenieria' && (
-                <GestionIngenieria
-                  disenos={disenos}
-                  proyectosUnicos={proyectosUnicos}
-                  API_URL={API_URL}
-                  recargarDatos={() => recargarDatos(true)}
-                  subVista={subVistaIngenieria}
-                  setPestanaIngenieria={setSubVistaIngenieria}
-                  mostrarToast={mostrarToast}
-                  puedeEditar={puedeEditarModuloActual}
-                />
-              )}
-
-              {/* 5.1. MÓDULO DE TABLERO KANBAN SEPARADO */}
-              {moduloActivo === 'kanban' && (
-                <GestionKanban
-                  disenos={disenos}
-                  proyectosUnicos={proyectosUnicos}
-                  movimientosAlmacen={movimientosAlmacen}
-                  API_URL={API_URL}
-                  recargarDatos={() => recargarDatos(true)}
-                  mostrarToast={mostrarToast}
-                  puedeEditar={puedeEditarModuloActual}
-                  usuarioActual={usuarioConPermisosActualizados}
-                />
-              )}
-
-              {/* 6. MÓDULO DE ALMACÉN, SALIDAS Y PRÉSTAMOS CON RH */}
-              {moduloActivo === 'almacen' && (
-                subVistaAlmacen === 'inventario' ? (
-                  <GestionAlmacenInventario
+            <Suspense
+              fallback={
+                <div style={estilos.loaderContainer}>
+                  <div style={estilos.appleSpinner} />
+                  <h3 style={{ fontSize: '14px', fontWeight: 600, marginTop: '12px', color: '#515154' }}>
+                    Cargando módulo...
+                  </h3>
+                </div>
+              }
+            >
+              <div key={`${moduloActivo}_${puedeEditarModuloActual}`} className="animate-view">
+                {/* 1. MÓDULO GERENCIA Y SEGUIMIENTO DE ALTO NIVEL */}
+                {moduloActivo === 'gerencia' && (
+                  <GestionGerencia
                     compras={compras}
                     proyectos={proyectos}
+                    disenos={disenos}
                     personalRH={personalRH}
-                    usuarioActual={usuarioConPermisosActualizados}
+                    evaluacionesKPI={evaluacionesKPI}
+                    puedeEditar={puedeEditarModuloActual}
+                  />
+                )}
+
+                {/* 2. MÓDULO DE COMPRAS */}
+                {moduloActivo === 'compras' && (
+                  <VistaConsulta
+                    compras={compras}
+                    iniciarEdicion={puedeEditarModuloActual ? iniciarEdicion : () => mostrarToast('🔒 Modo Solo Lectura', 'alerta')}
+                    abrirModalNuevaCompra={abrirModalNuevaCompra}
+                    proveedoresUnicos={proveedoresUnicos}
+                    categoriasUnicas={categoriasUnicas}
+                    proyectosUnicos={proyectosUnicos}
+                    puedeEditar={puedeEditarModuloActual}
+                  />
+                )}
+
+                {/* 3. MÓDULO DE PROYECTOS */}
+                {moduloActivo === 'proyectos' && (
+                  <GestionProyectos
+                    proyectos={proyectos}
+                    clientes={clientes}
+                    ubicaciones={ubicaciones}
                     API_URL={API_URL}
                     recargarDatos={() => recargarDatos(true)}
                     mostrarToast={mostrarToast}
-                    irAlVisor3D={() => setSubVistaAlmacen('visor3d')}
                     puedeEditar={puedeEditarModuloActual}
-                    syncTrigger={syncTrigger}
                   />
-                ) : (
-                  <GestionAlmacen3D
+                )}
+
+                {/* 4. MÓDULO DE CLIENTES (CRM) */}
+                {moduloActivo === 'clientes' && (
+                  <GestionClientes
+                    clientes={clientes}
+                    ubicaciones={ubicaciones}
+                    contactos={contactos}
                     API_URL={API_URL}
+                    recargarDatos={() => recargarDatos(true)}
+                    mostrarToast={mostrarToast}
                     puedeEditar={puedeEditarModuloActual}
-                    esModal={false}
-                    syncTrigger={syncTrigger}
                   />
-                )
-              )}
+                )}
 
-              {/* 7. MÓDULO DE RECURSOS HUMANOS Y KPIS */}
-              {moduloActivo === 'rh' && (
-                <GestionRH
-                  personalRH={personalRH}
-                  evaluacionesKPI={evaluacionesKPI}
-                  API_URL={API_URL}
-                  recargarDatos={() => recargarDatos(true)}
-                  mostrarToast={mostrarToast}
-                  puedeEditar={puedeEditarModuloActual}
-                />
-              )}
+                {/* 5. MÓDULO DE INGENIERÍA 3D */}
+                {moduloActivo === 'ingenieria' && (
+                  <GestionIngenieria
+                    disenos={disenos}
+                    proyectosUnicos={proyectosUnicos}
+                    API_URL={API_URL}
+                    recargarDatos={() => recargarDatos(true)}
+                    subVista={subVistaIngenieria}
+                    setPestanaIngenieria={setSubVistaIngenieria}
+                    mostrarToast={mostrarToast}
+                    puedeEditar={puedeEditarModuloActual}
+                  />
+                )}
 
-              {/* 8. ASISTENTE IA (CONECTADO A SERVER2.JS CON MCP + DEEPSEEK) */}
-              {moduloActivo === 'chatbot' && (
-                <GestionChatbot
-                  CHAT_API_URL={CHAT_API_URL}
-                  API_URL={API_URL}
-                  compras={compras}
-                  proyectos={proyectos}
-                  usuarioActual={usuarioConPermisosActualizados}
-                  mostrarToast={mostrarToast}
-                />
-              )}
-            </div>
+                {/* 5.1. MÓDULO DE TABLERO KANBAN SEPARADO */}
+                {moduloActivo === 'kanban' && (
+                  <GestionKanban
+                    disenos={disenos}
+                    proyectosUnicos={proyectosUnicos}
+                    movimientosAlmacen={movimientosAlmacen}
+                    API_URL={API_URL}
+                    recargarDatos={() => recargarDatos(true)}
+                    mostrarToast={mostrarToast}
+                    puedeEditar={puedeEditarModuloActual}
+                    usuarioActual={usuarioConPermisosActualizados}
+                  />
+                )}
+
+                {/* 5.2. MÓDULO NUEVO: SEGUIMIENTO PRODUCCIÓN (KANBAN / GANTT / CALENDARIO MS PROJECT) */}
+                {moduloActivo === 'produccion' && (
+                  <GestionProduccion
+                    disenos={disenos}
+                    proyectosUnicos={proyectosUnicos}
+                    API_URL={API_URL}
+                    recargarDatos={() => recargarDatos(true)}
+                    mostrarToast={mostrarToast}
+                    puedeEditar={puedeEditarModuloActual}
+                  />
+                )}
+
+                {/* 6. MÓDULO DE ALMACÉN, SALIDAS Y PRÉSTAMOS CON RH */}
+                {moduloActivo === 'almacen' && (
+                  subVistaAlmacen === 'inventario' ? (
+                    <GestionAlmacenInventario
+                      compras={compras}
+                      proyectos={proyectos}
+                      personalRH={personalRH}
+                      usuarioActual={usuarioConPermisosActualizados}
+                      API_URL={API_URL}
+                      recargarDatos={() => recargarDatos(true)}
+                      mostrarToast={mostrarToast}
+                      irAlVisor3D={() => setSubVistaAlmacen('visor3d')}
+                      puedeEditar={puedeEditarModuloActual}
+                      syncTrigger={syncTrigger}
+                    />
+                  ) : (
+                    <GestionAlmacen3D
+                      API_URL={API_URL}
+                      puedeEditar={puedeEditarModuloActual}
+                      esModal={false}
+                      syncTrigger={syncTrigger}
+                    />
+                  )
+                )}
+
+                {/* 7. MÓDULO DE RECURSOS HUMANOS Y KPIS */}
+                {moduloActivo === 'rh' && (
+                  <GestionRH
+                    personalRH={personalRH}
+                    evaluacionesKPI={evaluacionesKPI}
+                    API_URL={API_URL}
+                    recargarDatos={() => recargarDatos(true)}
+                    mostrarToast={mostrarToast}
+                    puedeEditar={puedeEditarModuloActual}
+                  />
+                )}
+
+                {/* 8. ASISTENTE IA (CONECTADO A SERVER2.JS CON GEMINI + DEEPSEEK MCP) */}
+                {moduloActivo === 'chatbot' && (
+                  <GestionChatbot
+                    CHAT_API_URL={CHAT_API_URL}
+                    compras={compras}
+                    proyectos={proyectos}
+                    usuarioActual={usuarioConPermisosActualizados}
+                    mostrarToast={mostrarToast}
+                  />
+                )}
+              </div>
+            </Suspense>
           )}
         </main>
       </div>

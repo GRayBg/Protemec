@@ -8,6 +8,7 @@ const MODULOS_SISTEMA = [
   { id: 'clientes', label: '🏢 Clientes y Directorio', desc: 'Empresas, plantas industriales y contactos' },
   { id: 'ingenieria', label: '⚙️ Ingeniería y BOM 3D', desc: 'Visor CAD 3D, ensambles y planos técnicos' },
   { id: 'kanban', label: '📋 Tablero Kanban y Producción', desc: 'Control de avance por piezas/ensambles, conteo y vinculación con almacén' },
+  { id: 'produccion', label: '🏭 Seguimiento Producción (Kanban / Gantt)', desc: 'Suite enfocada en Kanban, Lista BOM/Gantt global, etapas (material/maquinado/pintado), PDFs y calendario' },
   { id: 'almacen', label: '📦 Almacén Digital 3D', desc: 'Entradas manuales, salidas, préstamos de herramienta y visor 3D' },
   { id: 'rh', label: '👥 Recursos Humanos y KPIs', desc: 'Expedientes de personal (activo/baja) y evaluación mensual de rendimiento' },
   { id: 'chatbot', label: '✨ Asistente IA', desc: 'Consultas rápidas mediante inteligencia artificial' },
@@ -31,8 +32,7 @@ export default function ModalConfiguracion({
   const [perfilSeleccionadoId, setPerfilSeleccionadoId] = useState(perfilesUsuarios[0]?.id || null)
   const [mostrarFormularioNuevo, setMostrarFormularioNuevo] = useState(false)
   const [guardandoDB, setGuardandoDB] = useState(false)
-  const [tablasBD, setTablasBD] = useState([])
-  const [cargandoTablas, setCargandoTablas] = useState(false)
+  const [tablasBD, setTablasBD] = useState(null)
 
   // Estados para crear un Nuevo Perfil con Nombre, Usuario y Contraseña
   const [nuevoNombre, setNuevoNombre] = useState('')
@@ -41,22 +41,12 @@ export default function ModalConfiguracion({
   const [nuevoEmail, setNuevoEmail] = useState('')
   const [nuevoRol, setNuevoRol] = useState('Ingeniería')
 
-  // Estados para Credenciales Maestras (Admin)
-  const [userMaestroTemp, setUserMaestroTemp] = useState(credencialesMaestras?.usuario || 'admin')
-  const [passMaestroTemp, setPassMaestroTemp] = useState(credencialesMaestras?.password || '')
+  // Estados editados para Credenciales Maestras (null = usar valor actual de BD)
+  const [userMaestroEdit, setUserMaestroEdit] = useState(null)
+  const [passMaestroEdit, setPassMaestroEdit] = useState(null)
 
-  useEffect(() => {
-    if (credencialesMaestras) {
-      setUserMaestroTemp(credencialesMaestras.usuario || 'admin')
-      setPassMaestroTemp(credencialesMaestras.password || '')
-    }
-  }, [credencialesMaestras])
-
-  useEffect(() => {
-    if (perfilesUsuarios.length > 0 && !perfilesUsuarios.some((p) => p.id === perfilSeleccionadoId)) {
-      setPerfilSeleccionadoId(perfilesUsuarios[0].id)
-    }
-  }, [perfilesUsuarios, perfilSeleccionadoId])
+  const userMaestroTemp = userMaestroEdit !== null ? userMaestroEdit : (credencialesMaestras?.usuario || 'admin')
+  const passMaestroTemp = passMaestroEdit !== null ? passMaestroEdit : (credencialesMaestras?.password || '')
 
   // Cargar lista real de tablas de Azure SQL desde el servidor MCP
   useEffect(() => {
@@ -68,26 +58,23 @@ export default function ModalConfiguracion({
       ? 'http://localhost:3001'
       : String(CHAT_API_URL || 'https://api-chatbot-e0e5gtfvbdf6aact.westus3-01.azurewebsites.net').replace(/\/+$/, '')
 
-    let cancelado = false
-    setCargandoTablas(true)
-    fetch(`${baseChatUrl}/api/tablas`)
+    const controller = new AbortController()
+    fetch(`${baseChatUrl}/api/tablas`, { signal: controller.signal })
       .then((r) => r.json())
       .then((data) => {
-        if (!cancelado && Array.isArray(data?.tablas)) {
-          setTablasBD(data.tablas)
-        }
+        setTablasBD(Array.isArray(data?.tablas) ? data.tablas : [])
       })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelado) setCargandoTablas(false)
+      .catch((err) => {
+        if (err.name !== 'AbortError') setTablasBD([])
       })
 
-    return () => {
-      cancelado = true
-    }
+    return () => controller.abort()
   }, [abierto, CHAT_API_URL])
 
   if (!abierto) return null
+
+  const cargandoTablas = tablasBD === null
+  const listaTablasBD = tablasBD || []
 
   const esMaestro = Boolean(usuarioActual?.esMaestro)
   const autorizadoParaEditarPermisos = Boolean(esMaestro || puedeDarPermisos)
@@ -167,7 +154,7 @@ export default function ModalConfiguracion({
 
     // Si pasa de acceso total a restringido por primera vez y no tiene lista, preseleccionamos las actuales
     if (campo === 'accesoTotalTablas' && !nuevoValor && (!iaActual.tablasPermitidas || iaActual.tablasPermitidas.length === 0)) {
-      iaActualizada.tablasPermitidas = [...tablasBD]
+      iaActualizada.tablasPermitidas = [...listaTablasBD]
     }
 
     const perfilModificado = {
@@ -215,7 +202,7 @@ export default function ModalConfiguracion({
         ia: {
           ...iaActual,
           accesoTotalTablas: false,
-          tablasPermitidas: seleccionarTodas ? [...tablasBD] : []
+          tablasPermitidas: seleccionarTodas ? [...listaTablasBD] : []
         }
       }
     }
@@ -258,6 +245,7 @@ export default function ModalConfiguracion({
         clientes: { ver: true, editar: false },
         ingenieria: { ver: nuevoRol === 'Ingeniería' || nuevoRol === 'Dirección', editar: nuevoRol === 'Ingeniería' },
         kanban: { ver: true, editar: nuevoRol !== 'Solo Lectura' },
+        produccion: { ver: true, editar: nuevoRol !== 'Solo Lectura' },
         almacen: { ver: true, editar: nuevoRol === 'Almacén' },
         rh: { ver: false, editar: false },
         chatbot: { ver: true, editar: true },
@@ -341,6 +329,8 @@ export default function ModalConfiguracion({
       if (!res.ok) throw new Error(actualizado.error || 'Error al actualizar cuenta maestra')
 
       setCredencialesMaestras(actualizado)
+      setUserMaestroEdit(null)
+      setPassMaestroEdit(null)
       if (mostrarToast) mostrarToast('Credenciales del Administrador Maestro actualizadas en Azure SQL')
       if (recargarDatos) recargarDatos()
     } catch (err) {
@@ -747,9 +737,9 @@ export default function ModalConfiguracion({
                             <div style={{ backgroundColor: '#ffffff', padding: '12px 14px', borderRadius: '10px', border: '1px solid var(--border-light)' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
                                 <span className="pro-label" style={{ margin: 0 }}>
-                                  Tablas autorizadas en Azure SQL ({tablasSeleccionadas.length} / {tablasBD.length})
+                                  Tablas autorizadas en Azure SQL ({tablasSeleccionadas.length} / {listaTablasBD.length})
                                 </span>
-                                {autorizadoParaEditarPermisos && tablasBD.length > 0 && (
+                                {autorizadoParaEditarPermisos && listaTablasBD.length > 0 && (
                                   <div style={{ display: 'flex', gap: '6px' }}>
                                     <button
                                       type="button"
@@ -775,13 +765,13 @@ export default function ModalConfiguracion({
 
                               {cargandoTablas ? (
                                 <div style={{ fontSize: '12px', color: '#6b7280' }}>Cargando tablas de Azure SQL...</div>
-                              ) : tablasBD.length === 0 ? (
+                              ) : listaTablasBD.length === 0 ? (
                                 <div style={{ fontSize: '12px', color: '#b45309' }}>
                                   No se pudo obtener la lista de tablas desde el servidor MCP (`{CHAT_API_URL}`).
                                 </div>
                               ) : (
                                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(175px, 1fr))', gap: '8px' }}>
-                                  {tablasBD.map((tabla) => {
+                                  {listaTablasBD.map((tabla) => {
                                     const marcada = tablasSeleccionadas.includes(tabla)
                                     return (
                                       <label
@@ -835,7 +825,7 @@ export default function ModalConfiguracion({
                 <input
                   type="text"
                   value={userMaestroTemp}
-                  onChange={(e) => setUserMaestroTemp(e.target.value)}
+                  onChange={(e) => setUserMaestroEdit(e.target.value)}
                   required
                   className="pro-input pro-mono"
                 />
@@ -846,7 +836,7 @@ export default function ModalConfiguracion({
                 <input
                   type="text"
                   value={passMaestroTemp}
-                  onChange={(e) => setPassMaestroTemp(e.target.value)}
+                  onChange={(e) => setPassMaestroEdit(e.target.value)}
                   required
                   className="pro-input pro-mono"
                 />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import GlbViewer from './GlbViewer'
 
@@ -156,14 +156,26 @@ export default function GestionKanban({
     })
   }, [movimientosAlmacen, proyectoFiltro])
 
-  // Métricas de cada ítem
+  // Métricas de cada ítem (calculando cantidad global multiplicada por ensambles padre)
   const obtenerMetricasItem = useCallback((item) => {
     const tieneHijos = disenos.some((h) => h.PadreID === item.ID)
-    const reqUnitaria = Math.max(1, item.CantidadRequerida || 1)
+    const reqUnitariaBase = Math.max(1, Number(item.CantidadRequerida) || 1)
+
+    let multiplicadorPadre = 1
+    const visitados = new Set([item.ID])
+    let padreActualId = item.PadreID
+    while (padreActualId && !visitados.has(padreActualId)) {
+      visitados.add(padreActualId)
+      const padre = disenos.find((d) => d.ID === padreActualId)
+      if (!padre) break
+      multiplicadorPadre *= Math.max(1, Number(padre.CantidadRequerida) || 1)
+      padreActualId = padre.PadreID
+    }
+
+    const reqTotal = reqUnitariaBase * multiplicadorPadre
     let listaTotal = item.CantidadLista || 0
 
     if (tieneHijos) {
-      // Calcular a partir de los hijos
       const hijos = disenos.filter((h) => h.PadreID === item.ID)
       let conjuntosPosibles = Infinity
       hijos.forEach((hijo) => {
@@ -176,13 +188,24 @@ export default function GestionKanban({
       listaTotal = conjuntosPosibles
     }
 
-    const porcentaje = Math.min(100, Math.round((listaTotal / reqUnitaria) * 100))
+    const porcentaje = Math.min(100, Math.round((listaTotal / reqTotal) * 100))
     const estadoKanban = porcentaje >= 100 ? 'completado' : porcentaje > 0 ? 'proceso' : 'pendiente'
-    const faltantes = Math.max(0, reqUnitaria - listaTotal)
+    const faltantes = Math.max(0, reqTotal - listaTotal)
     const bitacora = parsearBitacora(item)
     const ultimoRegistro = bitacora.length > 0 ? bitacora[bitacora.length - 1] : null
 
-    return { tieneHijos, reqUnitaria, listaTotal, porcentaje, estadoKanban, faltantes, bitacora, ultimoRegistro }
+    return {
+      tieneHijos,
+      reqUnitaria: reqTotal,
+      reqUnitariaBase,
+      multiplicadorPadre,
+      listaTotal,
+      porcentaje,
+      estadoKanban,
+      faltantes,
+      bitacora,
+      ultimoRegistro
+    }
   }, [disenos, parsearBitacora])
 
   // Métricas Globales del Proyecto
@@ -247,7 +270,7 @@ export default function GestionKanban({
     setColumnaHover(null)
     if (!itemArrastrado || !puedeEditar) return
 
-    const { tieneHijos, reqUnitaria, bitacora } = obtenerMetricasItem(itemArrastrado)
+    const { tieneHijos, reqUnitaria, reqUnitariaBase, bitacora } = obtenerMetricasItem(itemArrastrado)
     if (tieneHijos) {
       notificar('Los ensambles padre calculan su avance automáticamente a partir de sus componentes hijos', 'alerta')
       setItemArrastrado(null)
@@ -285,7 +308,7 @@ export default function GestionKanban({
     persistirAvanceConBitacora(
       itemArrastrado.ID,
       nuevaCantidadLista,
-      reqUnitaria,
+      reqUnitariaBase,
       bitacoraNueva,
       `Estado actualizado a "${columnaDestino.toUpperCase()}"`
     )
@@ -312,7 +335,7 @@ export default function GestionKanban({
       return
     }
 
-    const { reqUnitaria, listaTotal, bitacora } = obtenerMetricasItem(modalConteoItem)
+    const { reqUnitaria, reqUnitariaBase, listaTotal, bitacora } = obtenerMetricasItem(modalConteoItem)
     const nuevaLista = Math.min(reqUnitaria, listaTotal + cantNum)
 
     const nuevoRegistro = {
@@ -327,7 +350,7 @@ export default function GestionKanban({
     await persistirAvanceConBitacora(
       modalConteoItem.ID,
       nuevaLista,
-      reqUnitaria,
+      reqUnitariaBase,
       bitacoraNueva,
       `Conteo registrado: +${cantNum} unidades a "${modalConteoItem.Nombre}"`
     )
@@ -343,7 +366,7 @@ export default function GestionKanban({
       return
     }
 
-    const { reqUnitaria, listaTotal, bitacora } = obtenerMetricasItem(modalConteoItem)
+    const { reqUnitaria, reqUnitariaBase, listaTotal, bitacora } = obtenerMetricasItem(modalConteoItem)
     const nuevaLista = Math.min(reqUnitaria, listaTotal + cantImputar)
 
     const fechaSalidaFormateada = salida.FechaMovimiento ? new Date(salida.FechaMovimiento).toLocaleDateString('es-MX') : ''
@@ -362,7 +385,7 @@ export default function GestionKanban({
     await persistirAvanceConBitacora(
       modalConteoItem.ID,
       nuevaLista,
-      reqUnitaria,
+      reqUnitariaBase,
       bitacoraNueva,
       `Salida de almacén vinculada: +${cantImputar} u. de "${salida.NombreProducto}" sumadas a "${modalConteoItem.Nombre}"`
     )
@@ -389,7 +412,7 @@ export default function GestionKanban({
     if (!itemDestino) return
 
     const cantImputar = parseInt(cantidadImputarSalida, 10) || modalVincularSalida.Cantidad || 1
-    const { reqUnitaria, listaTotal, bitacora } = obtenerMetricasItem(itemDestino)
+    const { reqUnitaria, reqUnitariaBase, listaTotal, bitacora } = obtenerMetricasItem(itemDestino)
     const nuevaLista = Math.min(reqUnitaria, listaTotal + cantImputar)
 
     const fechaSalidaFormateada = modalVincularSalida.FechaMovimiento
@@ -410,7 +433,7 @@ export default function GestionKanban({
     await persistirAvanceConBitacora(
       itemDestino.ID,
       nuevaLista,
-      reqUnitaria,
+      reqUnitariaBase,
       bitacoraNueva,
       `Salida vinculada: +${cantImputar} u. sumadas a "${itemDestino.Nombre}"`
     )

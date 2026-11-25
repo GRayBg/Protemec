@@ -1,54 +1,51 @@
-import React, { useEffect } from 'react';
-import { useGLTF, Center } from '@react-three/drei';
-import * as THREE from 'three';
+import { useEffect, useMemo } from 'react'
+import { useGLTF, Center } from '@react-three/drei'
+import * as THREE from 'three'
 
 export function Almacen3D({ ubicacionesDestacadas = [] }) {
-  // Carga el archivo cargado en public/almacen.glb
-  const { scene } = useGLTF('/almacen.glb');
+  const { scene } = useGLTF('/almacen.glb')
 
-  // Material Verde Neón / Fluorescente para resaltar
-  const materialResaltado = new THREE.MeshStandardMaterial({
-    color: '#00ff66',
-    emissive: '#00aa33',
-    emissiveIntensity: 0.8,
-    roughness: 0.3,
-  });
+  const materialResaltado = useMemo(
+    () =>
+      new THREE.MeshStandardMaterial({
+        color: '#00ff66',
+        emissive: '#00aa33',
+        emissiveIntensity: 0.8,
+        roughness: 0.3
+      }),
+    []
+  )
 
   useEffect(() => {
-    if (!scene) return;
+    return () => {
+      materialResaltado.dispose()
+    }
+  }, [materialResaltado])
 
-    // Convertimos la lista de ubicaciones a minúsculas para comparar fácilmente
-    const listaUbicacionesLwr = ubicacionesDestacadas.map((u) => u.toLowerCase());
+  useEffect(() => {
+    if (!scene) return
 
-    // Recorremos todas las mallas del modelo 3D
+    const listaUbicacionesLwr = ubicacionesDestacadas.map((u) => String(u).toLowerCase())
+
     scene.traverse((child) => {
       if (child.isMesh) {
-        // Guardamos el material original
         if (!child.userData.materialOriginal) {
-          child.userData.materialOriginal = child.material;
+          child.userData.materialOriginal = child.material
         }
 
-        const nombreNodoLwr = child.name.toLowerCase();
+        const nombreNodoLwr = child.name.toLowerCase()
+        const esCoincidencia = listaUbicacionesLwr.some((ub) => nombreNodoLwr.includes(ub))
 
-        // Verificamos si la pieza del 3D coincide con algunas de las ubicaciones filtradas
-        const esCoincidencia = listaUbicacionesLwr.some((ub) =>
-          nombreNodoLwr.includes(ub)
-        );
-
-        if (esCoincidencia) {
-          child.material = materialResaltado;
-        } else {
-          child.material = child.userData.materialOriginal;
-        }
+        child.material = esCoincidencia ? materialResaltado : child.userData.materialOriginal
       }
-    });
-  }, [ubicacionesDestacadas, scene]);
+    })
+  }, [ubicacionesDestacadas, scene, materialResaltado])
 
   return (
     <Center>
       <primitive object={scene} />
     </Center>
-  );
+  )
 }
 
-useGLTF.preload('/almacen.glb');
+useGLTF.preload('/almacen.glb')

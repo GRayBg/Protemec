@@ -88,30 +88,19 @@ h5 {
 }
 
 /* ==========================================================================
-   BARRAS DE DESPLAZAMIENTO (SCROLLBARS) VISIBLES Y ERGONÓMICAS
+   BARRAS DE DESPLAZAMIENTO: OCULTAS VISUALMENTE EN LA PÁGINA PRINCIPAL
    ========================================================================== */
-::-webkit-scrollbar {
-  width: 11px;
-  height: 11px;
+html,
+body {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
-::-webkit-scrollbar-track {
-  background: #eef2f6;
-  border-radius: 8px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: #b0bac5;
-  border-radius: 8px;
-  border: 2px solid #eef2f6;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #7c8b9b;
-}
-
-::-webkit-scrollbar-corner {
-  background: #eef2f6;
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 /* Animaciones */
@@ -123,6 +112,44 @@ h5 {
   to {
     opacity: 1;
   }
+}
+
+@keyframes iphoneWelcomeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.94) translateY(10px);
+    filter: blur(8px);
+  }
+  20% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+  82% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.03) translateY(-6px);
+    filter: blur(6px);
+  }
+}
+
+.iphone-welcome-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  pointer-events: none;
+  animation: iphoneWelcomeIn 2.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 @keyframes modalScaleUp {

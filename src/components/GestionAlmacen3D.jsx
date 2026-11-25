@@ -1,4 +1,4 @@
-import React, { useState, Suspense, useMemo, useEffect, useRef } from 'react'
+import { useState, Suspense, useMemo, useEffect, useRef } from 'react'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls, Html, Bounds } from '@react-three/drei'
 import { Almacen3D } from './Almacen3D'
@@ -11,27 +11,21 @@ export default function GestionAlmacen3D({
   syncTrigger = 0
 }) {
   const [searchTerm, setSearchTerm] = useState('')
-  const [productoSeleccionado, setProductoSeleccionado] = useState(null)
+  const claveExterna = `${productoResaltado?.ID ?? productoResaltado?.id ?? ''}_${ubicacionResaltada ?? ''}`
+  const [seleccionUsuario, setSeleccionUsuario] = useState({ clave: '', definida: false, item: null })
   const [inventarioRemoto, setInventarioRemoto] = useState([])
-  const [cargando, setCargando] = useState(true)
+  const [cargando, setCargando] = useState(() => Boolean(API_URL))
   const [error, setError] = useState(null)
 
   const itemSeleccionadoRef = useRef(null)
 
   // OBTENER PRODUCTOS DESDE LA BASE DE DATOS (Se actualiza también con el botón Sincronizar)
   useEffect(() => {
-    if (!API_URL) {
-      setInventarioRemoto([])
-      setCargando(false)
-      return
-    }
+    if (!API_URL) return
 
     const controller = new AbortController()
 
     const cargarInventario = async () => {
-      setCargando(true)
-      setError(null)
-
       try {
         const respuesta = await fetch(
           `${API_URL}/api/inventario?t=${Date.now()}`,
@@ -57,6 +51,7 @@ export default function GestionAlmacen3D({
         }))
 
         setInventarioRemoto(productos)
+        setError(null)
       } catch (err) {
         if (err.name !== 'AbortError') {
           console.error('Error cargando inventario:', err)
@@ -75,9 +70,9 @@ export default function GestionAlmacen3D({
     return () => controller.abort()
   }, [API_URL, syncTrigger])
 
-  // AUTO-SELECCIONAR EL ARTÍCULO CUANDO SE ABRE DESDE LA VENTANA FLOTANTE DEL STOCK
-  useEffect(() => {
-    if (inventarioRemoto.length === 0) return
+  // ARTÍCULO DESTACADO DESDE VENTANA FLOTANTE DEL STOCK (SIN EFECTOS CASCADA)
+  const productoDestacadoExterno = useMemo(() => {
+    if (inventarioRemoto.length === 0) return null
 
     if (productoResaltado) {
       const idBuscado = productoResaltado.ID ?? productoResaltado.id
@@ -92,32 +87,20 @@ export default function GestionAlmacen3D({
           (nombreBuscado && String(p.nombre ?? '').toLowerCase() === nombreBuscado)
       )
 
-      if (encontrado) {
-        setProductoSeleccionado(encontrado)
-        return
-      }
+      if (encontrado) return encontrado
     }
 
     if (ubicacionResaltada) {
       const ubLwr = String(ubicacionResaltada).toLowerCase()
-      const encontradoPorUb = inventarioRemoto.find(
-        (p) => String(p.ubicacion ?? '').toLowerCase() === ubLwr
+      return (
+        inventarioRemoto.find(
+          (p) => String(p.ubicacion ?? '').toLowerCase() === ubLwr
+        ) ?? null
       )
-      if (encontradoPorUb) {
-        setProductoSeleccionado(encontradoPorUb)
-      }
     }
-  }, [productoResaltado, ubicacionResaltada, inventarioRemoto])
 
-  // Hacer scroll suave en la lista izquierda hacia el producto seleccionado
-  useEffect(() => {
-    if (productoSeleccionado && itemSeleccionadoRef.current) {
-      itemSeleccionadoRef.current.scrollIntoView({
-        behavior: 'smooth',
-        block: 'nearest'
-      })
-    }
-  }, [productoSeleccionado])
+    return null
+  }, [productoResaltado, ubicacionResaltada, inventarioRemoto])
 
   // FILTRAR PRODUCTOS DE LA BASE DE DATOS
   const productosFiltrados = useMemo(() => {
@@ -134,12 +117,28 @@ export default function GestionAlmacen3D({
 
   // MANTENER SINCRONIZADA LA SELECCIÓN
   const productoActivo = useMemo(() => {
-    if (!productoSeleccionado) return null
+    const base =
+      seleccionUsuario.definida && seleccionUsuario.clave === claveExterna
+        ? seleccionUsuario.item
+        : productoDestacadoExterno
 
-    return (
-      inventarioRemoto.find((p) => p.id === productoSeleccionado.id) ?? null
-    )
-  }, [productoSeleccionado, inventarioRemoto])
+    if (!base) return null
+    return inventarioRemoto.find((p) => p.id === base.id) ?? null
+  }, [seleccionUsuario, claveExterna, productoDestacadoExterno, inventarioRemoto])
+
+  const seleccionarProducto = (nuevoItem) => {
+    setSeleccionUsuario({ clave: claveExterna, definida: true, item: nuevoItem })
+  }
+
+  // Hacer scroll suave en la lista izquierda hacia el producto seleccionado
+  useEffect(() => {
+    if (productoActivo && itemSeleccionadoRef.current) {
+      itemSeleccionadoRef.current.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest'
+      })
+    }
+  }, [productoActivo])
 
   // UBICACIONES QUE SE ILUMINARÁN EN EL MODELO 3D
   const ubicacionesAColorear = useMemo(() => {
@@ -185,7 +184,7 @@ export default function GestionAlmacen3D({
           value={searchTerm}
           onChange={(e) => {
             setSearchTerm(e.target.value)
-            setProductoSeleccionado(null)
+            seleccionarProducto(null)
           }}
           className="pro-input"
           style={{ marginBottom: '12px', flexShrink: 0 }}
@@ -208,7 +207,7 @@ export default function GestionAlmacen3D({
           {productoActivo && (
             <button
               type="button"
-              onClick={() => setProductoSeleccionado(null)}
+              onClick={() => seleccionarProducto(null)}
               style={{
                 background: 'none',
                 border: 'none',
@@ -253,7 +252,7 @@ export default function GestionAlmacen3D({
                   key={item.id}
                   ref={isSelected ? itemSeleccionadoRef : null}
                   onClick={() =>
-                    setProductoSeleccionado(isSelected ? null : item)
+                    seleccionarProducto(isSelected ? null : item)
                   }
                   style={estilos.itemLista(isSelected)}
                 >

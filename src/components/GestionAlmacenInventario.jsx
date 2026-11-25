@@ -84,8 +84,21 @@ export default function GestionAlmacenInventario({
 
   // Recarga al iniciar y también cada vez que se presiona el botón "Sincronizar" en el Header
   useEffect(() => {
-    cargarAlmacen()
-  }, [cargarAlmacen, syncTrigger])
+    const controller = new AbortController()
+    const ts = Date.now()
+
+    Promise.all([
+      fetch(`${API_URL}/api/inventario?t=${ts}`, { signal: controller.signal }),
+      fetch(`${API_URL}/api/inventario/movimientos?t=${ts}`, { signal: controller.signal })
+    ])
+      .then(async ([resInv, resMov]) => {
+        if (resInv.ok) setInventario(await resInv.json())
+        if (resMov.ok) setMovimientos(await resMov.json())
+      })
+      .catch(() => {})
+
+    return () => controller.abort()
+  }, [API_URL, syncTrigger])
 
   // Solo mostrar personal ACTIVO de RH
   const personalActivo = useMemo(
@@ -93,18 +106,15 @@ export default function GestionAlmacenInventario({
     [personalRH]
   )
 
-  useEffect(() => {
-    if (!empGrupoId && personalActivo.length > 0) {
-      setEmpGrupoId(String(personalActivo[0].EmpleadoID))
-    }
-  }, [personalActivo, empGrupoId])
+  const empGrupoIdEfectivo =
+    empGrupoId || (personalActivo[0] ? String(personalActivo[0].EmpleadoID) : '')
 
   const comprasPendientesRecepcion = useMemo(
     () =>
       compras.filter(
         (c) =>
           (c.Estatus || c.estatus) === 'Comprado' &&
-          (c.EstatusAlmacen || c.estatusAlmacen) !== 'Recibido en Almacén'
+          !String(c.EstatusAlmacen || c.estatusAlmacen || '').toLowerCase().includes('recibido')
       ),
     [compras]
   )
@@ -415,7 +425,7 @@ export default function GestionAlmacenInventario({
 
   const autorizarDespachoEnGrupo = async (e) => {
     e.preventDefault()
-    if (!empGrupoId) {
+    if (!empGrupoIdEfectivo) {
       if (mostrarToast) mostrarToast('Selecciona al colaborador responsable del envío', 'alerta')
       return
     }
@@ -430,7 +440,7 @@ export default function GestionAlmacenInventario({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          empleadoID: parseInt(empGrupoId, 10),
+          empleadoID: parseInt(empGrupoIdEfectivo, 10),
           proyecto: proyectoGrupo,
           sitioTrabajo: sitioTrabajoGrupo.trim(),
           notasGenerales: notasGrupo.trim(),
@@ -1075,7 +1085,7 @@ export default function GestionAlmacenInventario({
             <div>
               <label className="pro-label">Colaborador Responsable de la Cuadrilla / Kit (RH Activo) *</label>
               <select
-                value={empGrupoId}
+                value={empGrupoIdEfectivo}
                 onChange={(e) => setEmpGrupoId(e.target.value)}
                 required
                 className="pro-select"

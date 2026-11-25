@@ -159,13 +159,17 @@ export default function GestionIngenieria({
     }
   }
 
-  const calcularAvanceAcumulado = (nodoId, multiplicadorPadre = 1) => {
+  const calcularAvanceAcumulado = (nodoId, multiplicadorPadre = 1, visitados = new Set()) => {
+    if (visitados.has(nodoId)) return { reqTotal: 0, listaTotal: 0 }
+    const nuevosVisitados = new Set(visitados)
+    nuevosVisitados.add(nodoId)
+
     const elemento = disenosFiltrados.find((d) => d.ID === nodoId)
     if (!elemento) return { reqTotal: 0, listaTotal: 0 }
 
     const reqUnitaria = elemento.CantidadRequerida || 1
     const reqEfectiva = reqUnitaria * multiplicadorPadre
-    const hijos = disenosFiltrados.filter((d) => d.PadreID === nodoId)
+    const hijos = disenosFiltrados.filter((d) => d.PadreID === nodoId && !nuevosVisitados.has(d.ID))
 
     if (hijos.length === 0) {
       return { reqTotal: reqEfectiva, listaTotal: elemento.CantidadLista || 0 }
@@ -175,7 +179,7 @@ export default function GestionIngenieria({
     let conjuntosPosibles = Infinity
 
     hijos.forEach((hijo) => {
-      const acum = calcularAvanceAcumulado(hijo.ID, reqEfectiva)
+      const acum = calcularAvanceAcumulado(hijo.ID, reqEfectiva, nuevosVisitados)
       totalReqPiezas += acum.reqTotal
       const reqPorPadre = hijo.CantidadRequerida || 1
       const conjuntosQueAporta = Math.floor(acum.listaTotal / reqPorPadre)
@@ -187,16 +191,32 @@ export default function GestionIngenieria({
     return { reqTotal: reqEfectiva, listaTotal: conjuntosPosibles, piezasEfectivasReq: totalReqPiezas }
   }
 
+  const obtenerMultiplicadorAncestros = (item) => {
+    let mult = 1
+    const visitados = new Set([item.ID])
+    let padreActualId = item.PadreID
+    while (padreActualId && !visitados.has(padreActualId)) {
+      visitados.add(padreActualId)
+      const padre = disenos.find((d) => d.ID === padreActualId)
+      if (!padre) break
+      mult *= Math.max(1, Number(padre.CantidadRequerida) || 1)
+      padreActualId = padre.PadreID
+    }
+    return mult
+  }
+
   const obtenerMetricasItem = (item) => {
     const tieneHijos = disenosFiltrados.some((h) => h.PadreID === item.ID)
-    const reqUnitaria = item.CantidadRequerida || 1
+    const reqUnitaria = Math.max(1, Number(item.CantidadRequerida) || 1)
+    const multiplicadorPadre = obtenerMultiplicadorAncestros(item)
+    const reqTotal = reqUnitaria * multiplicadorPadre
     let listaTotal = item.CantidadLista || 0
     if (tieneHijos) {
-      listaTotal = calcularAvanceAcumulado(item.ID, 1).listaTotal
+      listaTotal = calcularAvanceAcumulado(item.ID, multiplicadorPadre).listaTotal
     }
-    const porcentaje = reqUnitaria > 0 ? Math.min(100, Math.round((listaTotal / reqUnitaria) * 100)) : 0
+    const porcentaje = reqTotal > 0 ? Math.min(100, Math.round((listaTotal / reqTotal) * 100)) : 0
     const estadoKanban = porcentaje >= 100 ? 'completado' : porcentaje > 0 ? 'proceso' : 'pendiente'
-    return { tieneHijos, reqUnitaria, listaTotal, porcentaje, estadoKanban }
+    return { tieneHijos, reqUnitaria, multiplicadorPadre, reqTotal, listaTotal, porcentaje, estadoKanban }
   }
 
   // MANEJADORES DRAG & DROP KANBAN
@@ -204,7 +224,7 @@ export default function GestionIngenieria({
     setColumnaHover(null)
     if (!itemArrastrado || !puedeEditar) return
 
-    const { tieneHijos, reqUnitaria } = obtenerMetricasItem(itemArrastrado)
+    const { tieneHijos, reqUnitaria, reqTotal } = obtenerMetricasItem(itemArrastrado)
     if (tieneHijos) {
       notificar('Los ensambles padre calculan su avance automáticamente a partir de sus piezas hijas', 'alerta')
       setItemArrastrado(null)
@@ -215,14 +235,14 @@ export default function GestionIngenieria({
     if (columnaDestino === 'pendiente') {
       nuevaCantidadLista = 0
     } else if (columnaDestino === 'proceso') {
-      nuevaCantidadLista = Math.max(1, Math.floor(reqUnitaria / 2))
-      if (reqUnitaria === 1) {
+      nuevaCantidadLista = Math.max(1, Math.floor(reqTotal / 2))
+      if (reqTotal === 1) {
         notificar('Para piezas de 1 unidad, usa "+1" o arrastra a Completado', 'alerta')
         setItemArrastrado(null)
         return
       }
     } else if (columnaDestino === 'completado') {
-      nuevaCantidadLista = reqUnitaria
+      nuevaCantidadLista = reqTotal
     }
 
     actualizarCantidades(itemArrastrado.ID, nuevaCantidadLista, reqUnitaria)
@@ -253,14 +273,17 @@ export default function GestionIngenieria({
     )
   }
 
-  const renderizarFilasExplorador = (padreId = null, nivelProfundidad = 0) => {
+  const renderizarFilasExplorador = (padreId = null, nivelProfundidad = 0, visitados = new Set()) => {
     const nodos = disenosFiltrados.filter((d) => {
-      if (padreId === null) return !d.PadreID || d.TipoNivel === 'Ensamble'
+      if (visitados.has(d.ID)) return false
+      if (padreId === null) return !d.PadreID || !disenosFiltrados.some((p) => p.ID === d.PadreID)
       return d.PadreID === padreId
     })
 
     return nodos.map((item) => {
-      const tieneHijos = disenosFiltrados.some((h) => h.PadreID === item.ID)
+      const nuevosVisitados = new Set(visitados)
+      nuevosVisitados.add(item.ID)
+      const tieneHijos = disenosFiltrados.some((h) => h.PadreID === item.ID && !nuevosVisitados.has(h.ID))
       const estaAbierto = !!filasAbiertas[item.ID]
       const esModeloActivo = modeloSeleccionado === item.UrlGLB
 
@@ -332,20 +355,23 @@ export default function GestionIngenieria({
               </div>
             </td>
           </tr>
-          {estaAbierto && renderizarFilasExplorador(item.ID, nivelProfundidad + 1)}
+          {estaAbierto && renderizarFilasExplorador(item.ID, nivelProfundidad + 1, nuevosVisitados)}
         </React.Fragment>
       )
     })
   }
 
-  const renderizarFilasAvance = (padreId = null, nivelProfundidad = 0, multiplicadorAcumulado = 1) => {
+  const renderizarFilasAvance = (padreId = null, nivelProfundidad = 0, multiplicadorAcumulado = 1, visitados = new Set()) => {
     const nodos = disenosFiltrados.filter((d) => {
-      if (padreId === null) return !d.PadreID || d.TipoNivel === 'Ensamble'
+      if (visitados.has(d.ID)) return false
+      if (padreId === null) return !d.PadreID || !disenosFiltrados.some((p) => p.ID === d.PadreID)
       return d.PadreID === padreId
     })
 
     return nodos.map((item) => {
-      const tieneHijos = disenosFiltrados.some((h) => h.PadreID === item.ID)
+      const nuevosVisitados = new Set(visitados)
+      nuevosVisitados.add(item.ID)
+      const tieneHijos = disenosFiltrados.some((h) => h.PadreID === item.ID && !nuevosVisitados.has(h.ID))
       const estaAbierto = !!filasAbiertas[item.ID]
       const reqUnitaria = item.CantidadRequerida || 1
       const multiplicadorActual = multiplicadorAcumulado * reqUnitaria
@@ -472,7 +498,7 @@ export default function GestionIngenieria({
               </span>
             </td>
           </tr>
-          {estaAbierto && renderizarFilasAvance(item.ID, nivelProfundidad + 1, multiplicadorActual)}
+          {estaAbierto && renderizarFilasAvance(item.ID, nivelProfundidad + 1, multiplicadorActual, nuevosVisitados)}
         </React.Fragment>
       )
     })
@@ -667,7 +693,7 @@ export default function GestionIngenieria({
                       </div>
 
                       {itemsColumna.map((item) => {
-                        const { tieneHijos, reqUnitaria, listaTotal, porcentaje } = obtenerMetricasItem(item)
+                        const { tieneHijos, reqUnitaria, multiplicadorPadre, reqTotal, listaTotal, porcentaje } = obtenerMetricasItem(item)
                         const fechaItem = fechasCompromiso[item.ID]
 
                         return (
@@ -702,7 +728,8 @@ export default function GestionIngenieria({
 
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                               <span className="pro-mono" style={{ fontSize: '11.5px', fontWeight: 600, color: '#515154' }}>
-                                Piezas: {listaTotal} / {reqUnitaria}
+                                Piezas: {listaTotal} / {reqTotal}
+                                {multiplicadorPadre > 1 ? ` (${reqUnitaria}×${multiplicadorPadre})` : ''}
                               </span>
 
                               <div style={{ display: 'flex', gap: '4px' }}>
@@ -719,7 +746,7 @@ export default function GestionIngenieria({
                                   📅 {fechaItem ? fechaItem.slice(5) : '+Fecha'}
                                 </button>
 
-                                {puedeEditar && !tieneHijos && listaTotal < reqUnitaria && (
+                                {puedeEditar && !tieneHijos && listaTotal < reqTotal && (
                                   <button
                                     type="button"
                                     onClick={() => actualizarCantidades(item.ID, listaTotal + 1, reqUnitaria)}

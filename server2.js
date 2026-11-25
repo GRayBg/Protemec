@@ -179,7 +179,7 @@ function validarTablasEnConsultaSQL(sqlQuery, tablasPermitidas = []) {
     }
 
     const permitidasSet = new Set(tablasPermitidas.map((t) => String(t).toLowerCase()));
-    const tablaRegex = /\b(?:FROM|JOIN)\s+([a-zA-Z0-9_.\[\]]+)/gi;
+    const tablaRegex = /\b(?:FROM|JOIN)\s+([a-zA-Z0-9_.[\]]+)/gi;
     let match;
     while ((match = tablaRegex.exec(sqlQuery)) !== null) {
         let nombreTabla = match[1].trim();

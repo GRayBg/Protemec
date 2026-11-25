@@ -457,7 +457,7 @@ export default function VistaConsulta({
                 const idFila = fila.Numero ?? fila.ID ?? fila.Id ?? index
                 const estaAbierto = !!filasExpandidas[idFila]
                 const estAlmacen = fila.EstatusAlmacen || fila.estatusAlmacen || 'Pendiente'
-                const esRecibido = String(estAlmacen).toLowerCase() === 'recibido en almacén'
+                const esRecibido = String(estAlmacen).toLowerCase().includes('recibido')
 
                 return (
                   <React.Fragment key={idFila}>

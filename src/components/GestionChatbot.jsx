@@ -148,7 +148,6 @@ function limpiarUrlBase(url) {
 
 export default function GestionChatbot({
   CHAT_API_URL = AZURE_CHAT_URL,
-  API_URL = '',
   compras = [],
   proyectos = [],
   usuarioActual = null,
