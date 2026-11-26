@@ -81,6 +81,10 @@ export default function GestionProduccion({
   // Input oculto para subir/reemplazar PDF desde cualquier tarjeta o fila
   const pdfInputRef = useRef(null)
   const itemParaPdfRef = useRef(null)
+  const imgInputRef = useRef(null)
+  const itemParaImgRef = useRef(null)
+  const [menuAdjuntoItem, setMenuAdjuntoItem] = useState(null)
+  const [imagenHover, setImagenHover] = useState(null)
 
   const notificar = useCallback(
     (msg, tipo = 'exito') => {
@@ -361,11 +365,52 @@ export default function GestionProduccion({
   }
 
   const dispararSubidaPdf = (item) => {
-    if (!puedeEditar) return notificar('Modo solo lectura: no puedes subir planos PDF', 'alerta')
+    if (!puedeEditar) return notificar('Modo solo lectura: no puedes subir archivos', 'alerta')
+    setMenuAdjuntoItem(item)
+  }
+
+  const seleccionarArchivoPdfDirecto = (item) => {
+    setMenuAdjuntoItem(null)
     itemParaPdfRef.current = item
     if (pdfInputRef.current) {
       pdfInputRef.current.value = ''
       pdfInputRef.current.click()
+    }
+  }
+
+  const seleccionarImagenDirecto = (item) => {
+    setMenuAdjuntoItem(null)
+    itemParaImgRef.current = item
+    if (imgInputRef.current) {
+      imgInputRef.current.value = ''
+      imgInputRef.current.click()
+    }
+  }
+
+  const manejarArchivoImagenSeleccionado = async (e) => {
+    const file = e.target.files?.[0]
+    const item = itemParaImgRef.current
+    if (!file || !item) return
+
+    try {
+      setSubiendoPdfId(item.ID)
+      const formData = new FormData()
+      formData.append('archivoImagen', file)
+
+      const res = await fetch(`${API_URL}/api/ingenieria/${item.ID}/imagen`, {
+        method: 'POST',
+        body: formData
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Error al subir la imagen')
+
+      if (recargarDatos) await recargarDatos()
+      notificar(`🖼️ Imagen guardada en "${item.Nombre}"`)
+    } catch (err) {
+      notificar(err.message, 'error')
+    } finally {
+      setSubiendoPdfId(null)
+      itemParaImgRef.current = null
     }
   }
 
@@ -633,6 +678,30 @@ export default function GestionProduccion({
                   <span style={{ width: '10px', color: '#cbd5e1', flexShrink: 0 }}>•</span>
                 )}
                 {badgeNivel(item.TipoNivel)}
+                {item.UrlImagen && (
+                  <img
+                    src={obtenerUrlPdfSegura(item.UrlImagen)}
+                    alt={item.Nombre}
+                    onMouseEnter={(e) =>
+                      setImagenHover({
+                        url: obtenerUrlPdfSegura(item.UrlImagen),
+                        nombre: item.Nombre,
+                        x: e.clientX,
+                        y: e.clientY
+                      })
+                    }
+                    onMouseLeave={() => setImagenHover(null)}
+                    style={{
+                      width: '28px',
+                      height: '28px',
+                      objectFit: 'cover',
+                      borderRadius: '6px',
+                      border: '1px solid #cbd5e1',
+                      cursor: 'zoom-in',
+                      flexShrink: 0
+                    }}
+                  />
+                )}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <strong style={{ fontSize: '12.5px', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.25, display: 'block' }}>
                     {item.Nombre}
@@ -777,12 +846,19 @@ export default function GestionProduccion({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-      {/* Input oculto global para subir PDFs */}
+      {/* Input oculto global para subir PDFs e Imágenes */}
       <input
         ref={pdfInputRef}
         type="file"
         accept="application/pdf,.pdf"
         onChange={manejarArchivoPdfSeleccionado}
+        style={{ display: 'none' }}
+      />
+      <input
+        ref={imgInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/*"
+        onChange={manejarArchivoImagenSeleccionado}
         style={{ display: 'none' }}
       />
 
@@ -1316,6 +1392,89 @@ export default function GestionProduccion({
               <div className="pro-modal-body" style={{ flex: 1, padding: 0 }}>
                 <iframe src={pdfPrevisualizando.url} title="Plano PDF" style={{ width: '100%', height: '100%', border: 'none' }} />
               </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* MODAL PARA ELEGIR SI SUBIR PLANO PDF O IMAGEN DEL ELEMENTO */}
+      {menuAdjuntoItem &&
+        createPortal(
+          <div className="pro-modal-backdrop" onClick={() => setMenuAdjuntoItem(null)}>
+            <div className="pro-modal-window" style={{ maxWidth: '400px' }} onClick={(e) => e.stopPropagation()}>
+              <div className="pro-modal-header">
+                <h3 style={{ fontSize: '15px', margin: 0 }}>📎 Adjuntar a {menuAdjuntoItem.Nombre}</h3>
+                <button type="button" onClick={() => setMenuAdjuntoItem(null)} className="pro-btn pro-btn-secondary pro-btn-sm">
+                  ✕
+                </button>
+              </div>
+              <div className="pro-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ margin: 0, fontSize: '12.5px', color: '#515154' }}>
+                  ¿Qué deseas subir al almacenamiento?
+                </p>
+                <button
+                  type="button"
+                  onClick={() => seleccionarArchivoPdfDirecto(menuAdjuntoItem)}
+                  className="pro-btn pro-btn-secondary"
+                  style={{ justifyContent: 'flex-start', gap: '10px', padding: '12px 14px' }}
+                >
+                  <span>📄</span>
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, fontSize: '13px' }}>Archivo Plano PDF</div>
+                    <div style={{ fontSize: '11px', color: '#86868b' }}>Plano técnico de fabricación (.pdf)</div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => seleccionarImagenDirecto(menuAdjuntoItem)}
+                  className="pro-btn pro-btn-secondary"
+                  style={{ justifyContent: 'flex-start', gap: '10px', padding: '12px 14px' }}
+                >
+                  <span>🖼️</span>
+                  <div style={{ textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, fontSize: '13px' }}>Imagen del elemento</div>
+                    <div style={{ fontSize: '11px', color: '#86868b' }}>Foto o vista previa junto a PZA (.png, .jpg, .webp)</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* VENTANA EMERGENTE AL PASAR EL CURSOR SOBRE LA IMAGEN */}
+      {imagenHover &&
+        createPortal(
+          <div
+            style={{
+              position: 'fixed',
+              left: Math.min(imagenHover.x + 18, (typeof window !== 'undefined' ? window.innerWidth : 1200) - 380),
+              top: Math.max(16, Math.min(imagenHover.y - 120, (typeof window !== 'undefined' ? window.innerHeight : 800) - 380)),
+              zIndex: 99999,
+              pointerEvents: 'none',
+              backgroundColor: '#ffffff',
+              borderRadius: '14px',
+              padding: '10px',
+              boxShadow: '0 20px 45px rgba(0, 0, 0, 0.22)',
+              border: '1px solid rgba(0, 0, 0, 0.08)',
+              maxWidth: '360px'
+            }}
+          >
+            <img
+              src={imagenHover.url}
+              alt={imagenHover.nombre}
+              style={{
+                display: 'block',
+                maxWidth: '340px',
+                maxHeight: '300px',
+                width: 'auto',
+                height: 'auto',
+                borderRadius: '10px',
+                objectFit: 'contain'
+              }}
+            />
+            <div style={{ marginTop: '6px', fontSize: '12px', fontWeight: 600, color: '#1d1d1f', textAlign: 'center' }}>
+              {imagenHover.nombre}
             </div>
           </div>,
           document.body

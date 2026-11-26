@@ -114,6 +114,9 @@ async function asegurarColumnasRH() {
 
         IF COL_LENGTH('dbo.Ingenieria', 'FechaCompromiso') IS NULL
           ALTER TABLE dbo.Ingenieria ADD FechaCompromiso DATE NULL;
+
+        IF COL_LENGTH('dbo.Ingenieria', 'UrlImagen') IS NULL
+          ALTER TABLE dbo.Ingenieria ADD UrlImagen NVARCHAR(MAX) NULL;
       END
 
       IF OBJECT_ID('dbo.BitacoraProduccion', 'U') IS NULL
@@ -783,6 +786,32 @@ app.post('/api/ingenieria/:id/pdf', upload.single('archivoPdf'), async (req, res
     })
 
     res.json({ urlPdf: urlPDF, mensaje: 'Plano PDF adjuntado correctamente' })
+  } catch (e) {
+    res.status(500).json({ error: e.message })
+  }
+})
+
+app.post('/api/ingenieria/:id/imagen', upload.single('archivoImagen'), async (req, res) => {
+  const { id } = req.params
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Selecciona una imagen válida' })
+    }
+    const urlImagen = await subirABlobYObtenerSAS(req.file, CONTAINER_COMPRAS)
+    const pool = await getDbPool()
+    await pool.request()
+      .input('ID', sql.Int, parseInt(id, 10))
+      .input('IMG', sql.NVarChar, urlImagen)
+      .query('UPDATE Ingenieria SET UrlImagen = @IMG WHERE ID = @ID')
+
+    await registrarBitacoraProduccion(pool, {
+      ingenieriaId: id,
+      tipoCambio: 'Imagen',
+      detalle: { archivo: req.file.originalname, urlImagen },
+      usuario: req.body?.usuario
+    })
+
+    res.json({ urlImagen, mensaje: 'Imagen del elemento guardada correctamente' })
   } catch (e) {
     res.status(500).json({ error: e.message })
   }
