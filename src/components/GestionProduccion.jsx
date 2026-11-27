@@ -8,35 +8,49 @@ const ETAPAS_PROCESO = [
 ]
 
 function parsearEtapas(raw, itemId) {
-  const base = { materialListo: false, maquinado: false, pintado: false }
-  if (raw) {
-    try {
-      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-      if (parsed && typeof parsed === 'object') {
-        return {
-          materialListo: Boolean(parsed.materialListo),
-          maquinado: Boolean(parsed.maquinado),
-          pintado: Boolean(parsed.pintado)
-        }
-      }
-    } catch {
-      // Fallback
+  const intentarParsear = (valor) => {
+    if (!valor) return null
+    const parsed = typeof valor === 'string' ? JSON.parse(valor) : valor
+    if (parsed && Array.isArray(parsed.customEtapas) && parsed.customEtapas.length > 0) {
+      return parsed.customEtapas.map((e, idx) => ({
+        key: e.key || `etapa_${idx}`,
+        label: String(e.label || `Etapa ${idx + 1}`),
+        corto: String(e.corto || e.label || `Etapa ${idx + 1}`),
+        done: Boolean(e.done)
+      }))
     }
+    if (parsed && typeof parsed === 'object') {
+      return ETAPAS_PROCESO.map((def) => ({
+        key: def.key,
+        label: def.label,
+        corto: def.corto,
+        done: Boolean(parsed[def.key])
+      }))
+    }
+    return null
   }
+
+  try {
+    const desdeSql = intentarParsear(raw)
+    if (desdeSql) return desdeSql
+  } catch {
+    // Fallback
+  }
+
   try {
     const local = localStorage.getItem(`protemec_etapas_${itemId}`)
-    if (local) {
-      const parsed = JSON.parse(local)
-      return {
-        materialListo: Boolean(parsed.materialListo),
-        maquinado: Boolean(parsed.maquinado),
-        pintado: Boolean(parsed.pintado)
-      }
-    }
+    const desdeLocal = intentarParsear(local)
+    if (desdeLocal) return desdeLocal
   } catch {
     // Ignore
   }
-  return base
+
+  return ETAPAS_PROCESO.map((def) => ({
+    key: def.key,
+    label: def.label,
+    corto: def.corto,
+    done: false
+  }))
 }
 
 function leerFechasLocalesLegacy() {
@@ -98,6 +112,16 @@ export default function GestionProduccion({
   const [elementoEliminar, setElementoEliminar] = useState(null)
   const [guardandoCrud, setGuardandoCrud] = useState(false)
 
+  // Modal para personalizar etapas de proceso por pieza
+  const [modalEtapasItem, setModalEtapasItem] = useState(null)
+  const [etapasEditando, setEtapasEditando] = useState([])
+  const [nuevaEtapaInput, setNuevaEtapaInput] = useState('')
+
+  // Selector en árbol para "Pertenece a"
+  const [modalArbolPadreAbierto, setModalArbolPadreAbierto] = useState(false)
+  const [arbolPadreAbiertos, setArbolPadreAbiertos] = useState({})
+  const [busquedaArbolPadre, setBusquedaArbolPadre] = useState('')
+
   const notificar = useCallback(
     (msg, tipo = 'exito') => {
       if (mostrarToast) mostrarToast(msg, tipo)
@@ -149,18 +173,38 @@ export default function GestionProduccion({
     [fechasLegacy]
   )
 
-  // Cálculo recursivo de juegos listos para ensambles/subensambles
+  // Cálculo recursivo de juegos listos y porcentaje ponderado para ensambles/subensambles
   const calcularAvanceNodo = useCallback(
     function resolverNodo(nodoId, multiplicadorExterno = null, visitados = new Set()) {
       if (visitados.has(nodoId)) {
-        return { reqUnitaria: 1, multiplicadorPadre: 1, reqTotal: 1, listaTotal: 0, tieneHijos: false, todasEtapasHijosListas: true }
+        return {
+          reqUnitaria: 1,
+          multiplicadorPadre: 1,
+          reqTotal: 1,
+          listaTotal: 0,
+          tieneHijos: false,
+          todasEtapasHijosListas: true,
+          pctNodo: 0,
+          pesoTotal: 1,
+          avancePonderado: 0
+        }
       }
       const nuevosVisitados = new Set(visitados)
       nuevosVisitados.add(nodoId)
 
       const elemento = mapaDisenos.get(nodoId)
       if (!elemento) {
-        return { reqUnitaria: 1, multiplicadorPadre: 1, reqTotal: 1, listaTotal: 0, tieneHijos: false, todasEtapasHijosListas: true }
+        return {
+          reqUnitaria: 1,
+          multiplicadorPadre: 1,
+          reqTotal: 1,
+          listaTotal: 0,
+          tieneHijos: false,
+          todasEtapasHijosListas: true,
+          pctNodo: 0,
+          pesoTotal: 1,
+          avancePonderado: 0
+        }
       }
 
       const reqUnitaria = Math.max(1, Number(elemento.CantidadRequerida) || 1)
@@ -170,20 +214,40 @@ export default function GestionProduccion({
       const hijos = disenos.filter((d) => d.PadreID === nodoId && !nuevosVisitados.has(d.ID))
 
       if (hijos.length === 0) {
-        const etapas = parsearEtapas(elemento.SeguimientoEtapasJSON, elemento.ID)
-        const todasListas = etapas.materialListo && etapas.maquinado && etapas.pintado
+        const etapasList = parsearEtapas(elemento.SeguimientoEtapasJSON, elemento.ID)
+        const etapasCompletas = etapasList.filter((e) => e.done).length
+        const todasListas = etapasList.length === 0 ? true : etapasCompletas === etapasList.length
+        const listaTotal = Math.max(0, Number(elemento.CantidadLista) || 0)
+        const cantidadCompleta = listaTotal >= reqTotal
+
+        let pctNodo
+        if (cantidadCompleta && todasListas) {
+          pctNodo = 100
+        } else if (listaTotal === 0 && etapasCompletas === 0) {
+          pctNodo = 0
+        } else {
+          const pctPiezas = reqTotal > 0 ? Math.min(1, listaTotal / reqTotal) * 70 : 0
+          const pctEtapas = etapasList.length > 0 ? (etapasCompletas / etapasList.length) * 30 : 30
+          pctNodo = Math.min(99, Math.max(1, Math.round(pctPiezas + pctEtapas)))
+        }
+
         return {
           reqUnitaria,
           multiplicadorPadre,
           reqTotal,
-          listaTotal: Math.max(0, Number(elemento.CantidadLista) || 0),
+          listaTotal,
           tieneHijos: false,
-          todasEtapasHijosListas: todasListas
+          todasEtapasHijosListas: todasListas,
+          pctNodo,
+          pesoTotal: reqTotal,
+          avancePonderado: pctNodo * reqTotal
         }
       }
 
       let conjuntosPosibles = Infinity
       let todasEtapasHijosListas = true
+      let sumaAvancePonderado = 0
+      let sumaPesoHijos = 0
 
       hijos.forEach((hijo) => {
         const acumHijo = resolverNodo(hijo.ID, reqTotal, nuevosVisitados)
@@ -193,9 +257,21 @@ export default function GestionProduccion({
         if (!acumHijo.todasEtapasHijosListas || acumHijo.listaTotal < acumHijo.reqTotal) {
           todasEtapasHijosListas = false
         }
+        sumaAvancePonderado += acumHijo.avancePonderado
+        sumaPesoHijos += acumHijo.pesoTotal
       })
 
       if (conjuntosPosibles === Infinity) conjuntosPosibles = 0
+
+      let pctNodo = 0
+      if (sumaPesoHijos > 0) {
+        const pctPromedio = Math.round(sumaAvancePonderado / sumaPesoHijos)
+        if (todasEtapasHijosListas && conjuntosPosibles >= reqTotal) {
+          pctNodo = 100
+        } else if (sumaAvancePonderado > 0) {
+          pctNodo = Math.min(99, Math.max(1, pctPromedio))
+        }
+      }
 
       return {
         reqUnitaria,
@@ -203,7 +279,10 @@ export default function GestionProduccion({
         reqTotal,
         listaTotal: conjuntosPosibles,
         tieneHijos: true,
-        todasEtapasHijosListas
+        todasEtapasHijosListas,
+        pctNodo,
+        pesoTotal: sumaPesoHijos || reqTotal,
+        avancePonderado: sumaAvancePonderado
       }
     },
     [disenos, mapaDisenos, obtenerInfoAncestros]
@@ -214,43 +293,19 @@ export default function GestionProduccion({
     (item) => {
       const { padreDirecto } = obtenerInfoAncestros(item)
       const calc = calcularAvanceNodo(item.ID)
-      const etapas = parsearEtapas(item.SeguimientoEtapasJSON, item.ID)
-      const etapasCompletas = ETAPAS_PROCESO.filter((e) => etapas[e.key]).length
-      const etapasFaltantes = ETAPAS_PROCESO.filter((e) => !etapas[e.key]).map((e) => e.corto)
-      const todasEtapasListas = etapasCompletas === ETAPAS_PROCESO.length
+      const etapasList = parsearEtapas(item.SeguimientoEtapasJSON, item.ID)
+      const etapasCompletas = etapasList.filter((e) => e.done).length
+      const etapasFaltantes = etapasList.filter((e) => !e.done).map((e) => e.corto)
+      const todasEtapasListas = etapasList.length === 0 ? true : etapasCompletas === etapasList.length
 
-      let porcentaje = 0
-      let estadoKanban = 'pendiente'
-
-      if (calc.tieneHijos) {
-        const pctBase = calc.reqTotal > 0 ? Math.round((calc.listaTotal / calc.reqTotal) * 100) : 0
-        if (calc.listaTotal >= calc.reqTotal && calc.todasEtapasHijosListas) {
-          porcentaje = 100
-          estadoKanban = 'completado'
-        } else if (calc.listaTotal > 0 || disenos.some((h) => h.PadreID === item.ID && (Number(h.CantidadLista) > 0 || Object.values(parsearEtapas(h.SeguimientoEtapasJSON, h.ID)).some(Boolean)))) {
-          porcentaje = Math.min(99, Math.max(1, pctBase))
-          estadoKanban = 'proceso'
-        }
-      } else {
-        const cantidadCompleta = calc.listaTotal >= calc.reqTotal
-        if (cantidadCompleta && todasEtapasListas) {
-          porcentaje = 100
-          estadoKanban = 'completado'
-        } else if (calc.listaTotal === 0 && etapasCompletas === 0) {
-          porcentaje = 0
-          estadoKanban = 'pendiente'
-        } else {
-          const pctPiezas = calc.reqTotal > 0 ? Math.min(1, calc.listaTotal / calc.reqTotal) * 70 : 0
-          const pctEtapas = (etapasCompletas / ETAPAS_PROCESO.length) * 30
-          porcentaje = Math.min(99, Math.max(1, Math.round(pctPiezas + pctEtapas)))
-          estadoKanban = 'proceso'
-        }
-      }
+      const porcentaje = calc.pctNodo
+      const estadoKanban =
+        porcentaje === 100 ? 'completado' : porcentaje > 0 ? 'proceso' : 'pendiente'
 
       return {
         ...calc,
         padreDirecto,
-        etapas,
+        etapasList,
         etapasCompletas,
         etapasFaltantes,
         todasEtapasListas,
@@ -258,7 +313,7 @@ export default function GestionProduccion({
         estadoKanban
       }
     },
-    [calcularAvanceNodo, disenos, obtenerInfoAncestros]
+    [calcularAvanceNodo, obtenerInfoAncestros]
   )
 
   const disenosFiltrados = useMemo(() => {
@@ -336,23 +391,65 @@ export default function GestionProduccion({
   const toggleEtapaPieza = async (item, etapaKey) => {
     if (!puedeEditar) return notificar('Modo solo lectura: no puedes modificar etapas', 'alerta')
     const metricas = obtenerMetricasItem(item)
-    const nuevasEtapas = {
-      ...metricas.etapas,
-      [etapaKey]: !metricas.etapas[etapaKey]
-    }
-    const todasListas = ETAPAS_PROCESO.every((e) => nuevasEtapas[e.key])
+    const nuevasEtapasList = metricas.etapasList.map((e) =>
+      e.key === etapaKey ? { ...e, done: !e.done } : e
+    )
+    const todasListas = nuevasEtapasList.length === 0 ? true : nuevasEtapasList.every((e) => e.done)
+    const algunaLista = nuevasEtapasList.some((e) => e.done)
     const estatusAvance =
       metricas.listaTotal >= metricas.reqTotal && todasListas
         ? 'Completado'
-        : metricas.listaTotal > 0 || Object.values(nuevasEtapas).some(Boolean)
+        : metricas.listaTotal > 0 || algunaLista
           ? 'En Proceso'
           : 'Pendiente'
 
-    const etiquetaEtapa = ETAPAS_PROCESO.find((e) => e.key === etapaKey)?.label || etapaKey
+    const etapaObj = nuevasEtapasList.find((e) => e.key === etapaKey)
     await actualizarSeguimiento(
       item,
-      { seguimientoEtapas: nuevasEtapas, estatusAvance },
-      `${etiquetaEtapa}: ${nuevasEtapas[etapaKey] ? 'Completado ✓' : 'Pendiente'}`
+      { seguimientoEtapas: { customEtapas: nuevasEtapasList }, estatusAvance },
+      `${etapaObj?.label || etapaKey}: ${etapaObj?.done ? 'Completado ✓' : 'Pendiente'}`
+    )
+  }
+
+  const abrirEditorEtapas = (item) => {
+    if (!puedeEditar) return notificar('Modo solo lectura: no puedes editar etapas', 'alerta')
+    const actual = parsearEtapas(item.SeguimientoEtapasJSON, item.ID)
+    setEtapasEditando(actual.map((e) => ({ ...e })))
+    setNuevaEtapaInput('')
+    setModalEtapasItem(item)
+  }
+
+  const guardarEtapasPersonalizadas = async () => {
+    if (!modalEtapasItem || !puedeEditar) return
+    const limpias = etapasEditando
+      .map((e, idx) => ({
+        key: e.key || `etapa_${Date.now()}_${idx}`,
+        label: String(e.label || '').trim(),
+        corto: String(e.label || '').trim(),
+        done: Boolean(e.done)
+      }))
+      .filter((e) => e.label.length > 0)
+
+    if (limpias.length === 0) {
+      return notificar('Deja al menos 1 etapa de proceso', 'alerta')
+    }
+
+    const metricas = obtenerMetricasItem(modalEtapasItem)
+    const todasListas = limpias.every((e) => e.done)
+    const algunaLista = limpias.some((e) => e.done)
+    const estatusAvance =
+      metricas.listaTotal >= metricas.reqTotal && todasListas
+        ? 'Completado'
+        : metricas.listaTotal > 0 || algunaLista
+          ? 'En Proceso'
+          : 'Pendiente'
+
+    const itemTarget = modalEtapasItem
+    setModalEtapasItem(null)
+    await actualizarSeguimiento(
+      itemTarget,
+      { seguimientoEtapas: { customEtapas: limpias }, estatusAvance },
+      `Etapas actualizadas para "${itemTarget.Nombre}"`
     )
   }
 
@@ -644,36 +741,61 @@ export default function GestionProduccion({
     }
 
     return (
-      <div style={{ display: 'flex', gap: compacto ? '4px' : '6px', flexWrap: 'wrap' }}>
-        {ETAPAS_PROCESO.map((etapa) => {
-          const activa = metricas.etapas[etapa.key]
-          return (
-            <button
-              key={etapa.key}
-              type="button"
-              disabled={!puedeEditar || guardandoId === item.ID}
-              onClick={() => toggleEtapaPieza(item, etapa.key)}
-              title={`${etapa.label}: ${activa ? 'Hecho (clic para desmarcar)' : 'Pendiente (clic para marcar)'}`}
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '4px',
-                padding: compacto ? '3px 7px' : '4px 8px',
-                borderRadius: '999px',
-                fontSize: compacto ? '10.5px' : '11px',
-                fontWeight: 600,
-                cursor: puedeEditar ? 'pointer' : 'default',
-                border: `1px solid ${activa ? '#10b981' : '#cbd5e1'}`,
-                backgroundColor: activa ? '#ecfdf5' : '#f8fafc',
-                color: activa ? '#065f46' : '#64748b',
-                transition: 'all 0.15s ease'
-              }}
-            >
-              <span>{activa ? '✓' : '○'}</span>
-              <span>{compacto ? etapa.corto : etapa.label}</span>
-            </button>
-          )
-        })}
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: compacto ? '4px' : '6px', flexWrap: 'wrap', alignItems: 'center', flex: 1, minWidth: 0 }}>
+          {metricas.etapasList.map((etapa) => {
+            const activa = etapa.done
+            return (
+              <button
+                key={etapa.key}
+                type="button"
+                disabled={!puedeEditar || guardandoId === item.ID}
+                onClick={() => toggleEtapaPieza(item, etapa.key)}
+                title={`${etapa.label}: ${activa ? 'Hecho (clic para desmarcar)' : 'Pendiente (clic para marcar)'}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  padding: compacto ? '3px 7px' : '4px 8px',
+                  borderRadius: '999px',
+                  fontSize: compacto ? '10.5px' : '11px',
+                  fontWeight: 600,
+                  cursor: puedeEditar ? 'pointer' : 'default',
+                  border: `1px solid ${activa ? '#10b981' : '#cbd5e1'}`,
+                  backgroundColor: activa ? '#ecfdf5' : '#f8fafc',
+                  color: activa ? '#065f46' : '#64748b',
+                  transition: 'all 0.15s ease'
+                }}
+              >
+                <span>{activa ? '✓' : '○'}</span>
+                <span>{compacto ? etapa.corto : etapa.label}</span>
+              </button>
+            )
+          })}
+        </div>
+        {puedeEditar && (
+          <button
+            type="button"
+            disabled={guardandoId === item.ID}
+            onClick={() => abrirEditorEtapas(item)}
+            title="Agregar, editar o quitar etapas de esta pieza"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '3px 6px',
+              borderRadius: '999px',
+              fontSize: '11px',
+              cursor: 'pointer',
+              border: '1px dashed #94a3b8',
+              backgroundColor: '#ffffff',
+              color: '#475569',
+              flexShrink: 0
+            }}
+          >
+            ⚙️
+          </button>
+        )}
       </div>
     )
   }
@@ -1221,7 +1343,7 @@ export default function GestionProduccion({
                             </span>
                             {!m.tieneHijos && (
                               <span className="pro-mono" style={{ fontSize: '10.5px', fontWeight: 700, color: m.todasEtapasListas ? '#059669' : '#64748b' }}>
-                                {m.etapasCompletas}/3
+                                {m.etapasCompletas}/{m.etapasList.length}
                               </span>
                             )}
                           </div>
@@ -1697,17 +1819,48 @@ export default function GestionProduccion({
                     </div>
                   </div>
                   <div>
-                    <label className="pro-label">Pertenece a (Ensamble Padre opcional)</label>
-                    <select value={padreIDForm} onChange={(e) => setPadreIDForm(e.target.value)} className="pro-select">
-                      <option value="">-- Ninguno (Nivel raíz) --</option>
-                      {disenos
-                        .filter((d) => !elementoEditando || d.ID !== elementoEditando.ID)
-                        .map((d) => (
-                          <option key={d.ID} value={d.ID}>
-                            [{d.TipoNivel}] {d.Nombre} ({d.Proyecto})
-                          </option>
-                        ))}
-                    </select>
+                    <label className="pro-label">Pertenece a (Ensamble / Subensamble Padre)</label>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBusquedaArbolPadre('')
+                          setModalArbolPadreAbierto(true)
+                        }}
+                        className="pro-btn pro-btn-secondary"
+                        style={{
+                          flex: 1,
+                          justifyContent: 'space-between',
+                          textAlign: 'left',
+                          padding: '8px 12px',
+                          fontSize: '13px',
+                          fontWeight: 500
+                        }}
+                      >
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {padreIDForm
+                            ? (() => {
+                                const p = mapaDisenos.get(Number(padreIDForm))
+                                return p ? `[${p.TipoNivel}] ${p.Nombre}` : `ID #${padreIDForm}`
+                              })()
+                            : '🌐 Ninguno (Nivel raíz)'}
+                        </span>
+                        <span style={{ fontSize: '12px', color: '#0071e3', fontWeight: 600, flexShrink: 0, marginLeft: '8px' }}>
+                          🌳 Elegir en árbol
+                        </span>
+                      </button>
+                      {padreIDForm && (
+                        <button
+                          type="button"
+                          onClick={() => setPadreIDForm('')}
+                          className="pro-btn pro-btn-secondary pro-btn-sm"
+                          style={{ padding: '8px 10px' }}
+                          title="Quitar padre (dejar en nivel raíz)"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                     <div>
@@ -1809,6 +1962,315 @@ export default function GestionProduccion({
                 >
                   {guardandoCrud ? 'Eliminando...' : 'Sí, eliminar'}
                 </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* MODAL PERSONALIZAR ETAPAS DE PROCESO */}
+      {modalEtapasItem &&
+        createPortal(
+          <div className="pro-modal-backdrop" onClick={() => setModalEtapasItem(null)}>
+            <div className="pro-modal-window" style={{ maxWidth: '460px' }} onClick={(e) => e.stopPropagation()}>
+              <div className="pro-modal-header">
+                <h3 style={{ fontSize: '15px', margin: 0 }}>⚙️ Etapas de: {modalEtapasItem.Nombre}</h3>
+                <button type="button" onClick={() => setModalEtapasItem(null)} className="pro-btn pro-btn-secondary pro-btn-sm">
+                  ✕
+                </button>
+              </div>
+              <div className="pro-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <p style={{ margin: 0, fontSize: '12px', color: '#515154' }}>
+                  Puedes renombrar, quitar o agregar las etapas que necesite esta pieza (1, 2, 3 o más).
+                </p>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '260px', overflowY: 'auto' }}>
+                  {etapasEditando.map((et, idx) => (
+                    <div key={et.key || idx} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(et.done)}
+                        onChange={(e) => {
+                          const copia = [...etapasEditando]
+                          copia[idx] = { ...copia[idx], done: e.target.checked }
+                          setEtapasEditando(copia)
+                        }}
+                        title="Marcar como completada"
+                      />
+                      <input
+                        type="text"
+                        value={et.label}
+                        onChange={(e) => {
+                          const copia = [...etapasEditando]
+                          copia[idx] = { ...copia[idx], label: e.target.value, corto: e.target.value }
+                          setEtapasEditando(copia)
+                        }}
+                        className="pro-input"
+                        style={{ flex: 1, padding: '6px 10px', fontSize: '13px' }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setEtapasEditando(etapasEditando.filter((_, i) => i !== idx))}
+                        className="pro-btn pro-btn-secondary pro-btn-sm"
+                        style={{ color: '#dc2626', padding: '5px 8px' }}
+                        title="Quitar etapa"
+                      >
+                        🗑️
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
+                  <input
+                    type="text"
+                    placeholder="Nueva etapa (ej. Soldadura, Templado...)"
+                    value={nuevaEtapaInput}
+                    onChange={(e) => setNuevaEtapaInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        const txt = nuevaEtapaInput.trim()
+                        if (!txt) return
+                        setEtapasEditando([
+                          ...etapasEditando,
+                          { key: `etapa_${Date.now()}`, label: txt, corto: txt, done: false }
+                        ])
+                        setNuevaEtapaInput('')
+                      }
+                    }}
+                    className="pro-input"
+                    style={{ flex: 1, fontSize: '12.5px' }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const txt = nuevaEtapaInput.trim()
+                      if (!txt) return
+                      setEtapasEditando([
+                        ...etapasEditando,
+                        { key: `etapa_${Date.now()}`, label: txt, corto: txt, done: false }
+                      ])
+                      setNuevaEtapaInput('')
+                    }}
+                    className="pro-btn pro-btn-secondary pro-btn-sm"
+                  >
+                    ➕ Agregar
+                  </button>
+                </div>
+              </div>
+              <div className="pro-modal-footer" style={{ justifyContent: 'space-between' }}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEtapasEditando(
+                      ETAPAS_PROCESO.map((d) => ({ key: d.key, label: d.label, corto: d.corto, done: false }))
+                    )
+                  }
+                  className="pro-btn pro-btn-secondary pro-btn-sm"
+                  title="Restaurar Material, Maquinado y Pintado"
+                >
+                  ↺ Por defecto
+                </button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button type="button" onClick={() => setModalEtapasItem(null)} className="pro-btn pro-btn-secondary">
+                    Cancelar
+                  </button>
+                  <button type="button" onClick={guardarEtapasPersonalizadas} className="pro-btn pro-btn-primary">
+                    Guardar etapas
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* MODAL ÁRBOL JERÁRQUICO PARA SELECCIONAR "PERTENECE A" */}
+      {modalArbolPadreAbierto &&
+        createPortal(
+          <div className="pro-modal-backdrop" onClick={() => setModalArbolPadreAbierto(false)}>
+            <div className="pro-modal-window" style={{ maxWidth: '540px', maxHeight: '82vh' }} onClick={(e) => e.stopPropagation()}>
+              <div className="pro-modal-header">
+                <h3 style={{ fontSize: '15px', margin: 0 }}>🌳 Seleccionar Ensamble o Subensamble Padre</h3>
+                <button type="button" onClick={() => setModalArbolPadreAbierto(false)} className="pro-btn pro-btn-secondary pro-btn-sm">
+                  ✕
+                </button>
+              </div>
+              <div className="pro-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '10px', overflowY: 'auto' }}>
+                <input
+                  type="text"
+                  placeholder="🔍 Buscar ensamble, subensamble o pieza..."
+                  value={busquedaArbolPadre}
+                  onChange={(e) => setBusquedaArbolPadre(e.target.value)}
+                  className="pro-input"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPadreIDForm('')
+                    setModalArbolPadreAbierto(false)
+                  }}
+                  className="pro-btn pro-btn-secondary"
+                  style={{
+                    justifyContent: 'flex-start',
+                    gap: '8px',
+                    padding: '9px 12px',
+                    borderColor: !padreIDForm ? '#0071e3' : undefined,
+                    backgroundColor: !padreIDForm ? '#eff6ff' : undefined
+                  }}
+                >
+                  <span>🌐</span>
+                  <span style={{ fontWeight: 600 }}>Ninguno (Nivel raíz)</span>
+                </button>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '48vh', overflowY: 'auto', paddingRight: '4px' }}>
+                  {(() => {
+                    const q = busquedaArbolPadre.trim().toLowerCase()
+                    const disponibles = disenos.filter((d) => !elementoEditando || d.ID !== elementoEditando.ID)
+
+                    if (q) {
+                      const coincidencias = disponibles.filter(
+                        (d) =>
+                          String(d.Nombre || '').toLowerCase().includes(q) ||
+                          String(d.Proyecto || '').toLowerCase().includes(q)
+                      )
+                      if (coincidencias.length === 0) {
+                        return (
+                          <div style={{ padding: '20px', textAlign: 'center', color: '#86868b', fontSize: '12.5px' }}>
+                            No se encontraron elementos con &ldquo;{busquedaArbolPadre}&rdquo;
+                          </div>
+                        )
+                      }
+                      return coincidencias.map((d) => (
+                        <div
+                          key={d.ID}
+                          onClick={() => {
+                            setPadreIDForm(String(d.ID))
+                            setModalArbolPadreAbierto(false)
+                          }}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: '8px',
+                            padding: '8px 10px',
+                            borderRadius: '8px',
+                            cursor: 'pointer',
+                            border: String(padreIDForm) === String(d.ID) ? '1px solid #0071e3' : '1px solid #e2e8f0',
+                            backgroundColor: String(padreIDForm) === String(d.ID) ? '#eff6ff' : '#ffffff'
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                            {badgeNivel(d.TipoNivel)}
+                            <span style={{ fontSize: '13px', fontWeight: 600, color: '#1d1d1f' }}>{d.Nombre}</span>
+                            {d.Proyecto && <span style={{ fontSize: '11px', color: '#86868b' }}>({d.Proyecto})</span>}
+                          </div>
+                          <span style={{ fontSize: '11px', color: '#0071e3', fontWeight: 600 }}>Elegir</span>
+                        </div>
+                      ))
+                    }
+
+                    const renderizarNodosArbol = (padreId = null, nivel = 0, visitados = new Set()) => {
+                      const nodos = disponibles.filter((d) => {
+                        if (visitados.has(d.ID)) return false
+                        if (padreId === null) return !d.PadreID || !disponibles.some((p) => p.ID === d.PadreID)
+                        return d.PadreID === padreId
+                      })
+
+                      return nodos.map((nodo) => {
+                        const nuevosVisitados = new Set(visitados)
+                        nuevosVisitados.add(nodo.ID)
+                        const hijos = disponibles.filter((h) => h.PadreID === nodo.ID && !nuevosVisitados.has(h.ID))
+                        const tieneHijos = hijos.length > 0
+                        const abierto = Boolean(arbolPadreAbiertos[nodo.ID])
+                        const seleccionado = String(padreIDForm) === String(nodo.ID)
+
+                        return (
+                          <React.Fragment key={nodo.ID}>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: '8px',
+                                padding: '7px 10px',
+                                marginLeft: `${nivel * 18}px`,
+                                borderRadius: '8px',
+                                border: seleccionado ? '1px solid #0071e3' : '1px solid #e2e8f0',
+                                backgroundColor: seleccionado ? '#eff6ff' : '#ffffff'
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flex: 1, minWidth: 0 }}>
+                                {tieneHijos ? (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setArbolPadreAbiertos((prev) => ({ ...prev, [nodo.ID]: !prev[nodo.ID] }))
+                                    }
+                                    style={{
+                                      background: '#f1f5f9',
+                                      border: 'none',
+                                      borderRadius: '5px',
+                                      width: '22px',
+                                      height: '22px',
+                                      cursor: 'pointer',
+                                      fontSize: '10px',
+                                      color: '#334155',
+                                      flexShrink: 0
+                                    }}
+                                    title={abierto ? 'Contraer' : 'Desplegar componentes'}
+                                  >
+                                    {abierto ? '▼' : '▶'}
+                                  </button>
+                                ) : (
+                                  <span style={{ width: '22px', textAlign: 'center', color: '#cbd5e1', flexShrink: 0 }}>•</span>
+                                )}
+                                {badgeNivel(nodo.TipoNivel)}
+                                <span
+                                  onClick={() => {
+                                    if (tieneHijos) {
+                                      setArbolPadreAbiertos((prev) => ({ ...prev, [nodo.ID]: !prev[nodo.ID] }))
+                                    } else {
+                                      setPadreIDForm(String(nodo.ID))
+                                      setModalArbolPadreAbierto(false)
+                                    }
+                                  }}
+                                  style={{
+                                    fontSize: '13px',
+                                    fontWeight: 600,
+                                    color: '#1d1d1f',
+                                    cursor: 'pointer',
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap'
+                                  }}
+                                >
+                                  {nodo.Nombre}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPadreIDForm(String(nodo.ID))
+                                  setModalArbolPadreAbierto(false)
+                                }}
+                                className="pro-btn pro-btn-secondary pro-btn-sm"
+                                style={{ fontSize: '11px', padding: '3px 9px', color: '#0071e3', flexShrink: 0 }}
+                              >
+                                Seleccionar
+                              </button>
+                            </div>
+                            {tieneHijos && abierto && renderizarNodosArbol(nodo.ID, nivel + 1, nuevosVisitados)}
+                          </React.Fragment>
+                        )
+                      })
+                    }
+
+                    return renderizarNodosArbol(null, 0, new Set())
+                  })()}
+                </div>
               </div>
             </div>
           </div>,
