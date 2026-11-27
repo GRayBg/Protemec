@@ -56,7 +56,7 @@ export default function GestionProduccion({
   puedeEditar = true
 }) {
   const [modoVista, setModoVista] = useState('gantt') // 'gantt' | 'kanban' | 'calendario'
-  const [barraSuperiorVisible, setBarraSuperiorVisible] = useState(true)
+  const [barraSuperiorVisible, setBarraSuperiorVisible] = useState(false)
   const [proyectoFiltro, setProyectoFiltro] = useState('')
   const [busqueda, setBusqueda] = useState('')
   const [filtroNivelKanban, setFiltroNivelKanban] = useState('TODOS') // 'TODOS' | 'Pieza' | 'Ensamble' | 'Subensamble'
@@ -85,6 +85,18 @@ export default function GestionProduccion({
   const itemParaImgRef = useRef(null)
   const [menuAdjuntoItem, setMenuAdjuntoItem] = useState(null)
   const [imagenHover, setImagenHover] = useState(null)
+
+  // CRUD: Crear / Editar / Eliminar elemento
+  const [modalElementoAbierto, setModalElementoAbierto] = useState(false)
+  const [elementoEditando, setElementoEditando] = useState(null)
+  const [nombreForm, setNombreForm] = useState('')
+  const [proyectoForm, setProyectoForm] = useState('')
+  const [tipoNivelForm, setTipoNivelForm] = useState('Pieza')
+  const [padreIDForm, setPadreIDForm] = useState('')
+  const [cantidadReqForm, setCantidadReqForm] = useState(1)
+  const [cantidadListaForm, setCantidadListaForm] = useState(0)
+  const [elementoEliminar, setElementoEliminar] = useState(null)
+  const [guardandoCrud, setGuardandoCrud] = useState(false)
 
   const notificar = useCallback(
     (msg, tipo = 'exito') => {
@@ -457,6 +469,81 @@ export default function GestionProduccion({
       nuevaFecha ? `Fecha programada (${nuevaFecha}) para "${item.Nombre}"` : `Fecha eliminada de "${item.Nombre}"`
     )
     setModalFechaItem(null)
+  }
+
+  const abrirNuevoElemento = () => {
+    if (!puedeEditar) return notificar('Modo solo lectura: no puedes agregar elementos', 'alerta')
+    setElementoEditando(null)
+    setNombreForm('')
+    setProyectoForm(proyectoFiltro || proyectosUnicos[0] || '')
+    setTipoNivelForm('Pieza')
+    setPadreIDForm('')
+    setCantidadReqForm(1)
+    setCantidadListaForm(0)
+    setModalElementoAbierto(true)
+  }
+
+  const abrirEditarElemento = (item) => {
+    if (!puedeEditar) return notificar('Modo solo lectura: no puedes modificar elementos', 'alerta')
+    setElementoEditando(item)
+    setNombreForm(item.Nombre || '')
+    setProyectoForm(item.Proyecto || '')
+    setTipoNivelForm(item.TipoNivel || 'Pieza')
+    setPadreIDForm(item.PadreID ? String(item.PadreID) : '')
+    setCantidadReqForm(Math.max(1, Number(item.CantidadRequerida) || 1))
+    setCantidadListaForm(Math.max(0, Number(item.CantidadLista) || 0))
+    setModalElementoAbierto(true)
+  }
+
+  const guardarElementoCrud = async (e) => {
+    e.preventDefault()
+    if (!puedeEditar) return
+    if (!nombreForm.trim() || !proyectoForm.trim()) {
+      return notificar('Nombre y proyecto son obligatorios', 'alerta')
+    }
+    try {
+      setGuardandoCrud(true)
+      const formData = new FormData()
+      formData.append('nombre', nombreForm.trim())
+      formData.append('proyecto', proyectoForm.trim())
+      formData.append('tipoNivel', tipoNivelForm)
+      formData.append('padreID', padreIDForm || '')
+      formData.append('cantidadRequerida', String(Math.max(1, parseInt(cantidadReqForm, 10) || 1)))
+      formData.append('cantidadLista', String(Math.max(0, parseInt(cantidadListaForm, 10) || 0)))
+
+      const url = elementoEditando ? `${API_URL}/api/ingenieria/${elementoEditando.ID}` : `${API_URL}/api/ingenieria`
+      const method = elementoEditando ? 'PUT' : 'POST'
+      const res = await fetch(url, { method, body: formData })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'No se pudo guardar el elemento')
+
+      setModalElementoAbierto(false)
+      if (recargarDatos) await recargarDatos()
+      notificar(elementoEditando ? `✏️ "${nombreForm.trim()}" actualizado` : `✅ "${nombreForm.trim()}" agregado`)
+    } catch (err) {
+      notificar(err.message, 'error')
+    } finally {
+      setGuardandoCrud(false)
+    }
+  }
+
+  const confirmarEliminarElemento = async () => {
+    if (!elementoEliminar || !puedeEditar) return
+    try {
+      setGuardandoCrud(true)
+      const res = await fetch(`${API_URL}/api/ingenieria/${elementoEliminar.ID}`, { method: 'DELETE' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'No se pudo eliminar el elemento')
+
+      const nombreElim = elementoEliminar.Nombre
+      setElementoEliminar(null)
+      if (recargarDatos) await recargarDatos()
+      notificar(`🗑️ "${nombreElim}" eliminado`)
+    } catch (err) {
+      notificar(err.message, 'error')
+    } finally {
+      setGuardandoCrud(false)
+    }
   }
 
   // Drag & Drop Kanban respetando el checklist de las 3 etapas antes del 100%
@@ -910,6 +997,33 @@ export default function GestionProduccion({
               </button>
             </div>
 
+            {puedeEditar && (
+              <>
+                <button
+                  type="button"
+                  onClick={abrirNuevoElemento}
+                  className="pro-btn pro-btn-primary pro-btn-sm"
+                  style={{ fontSize: '11.5px', padding: '6px 11px' }}
+                  title="Agregar nueva pieza o ensamble"
+                >
+                  ➕ Nuevo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const primero = disenosFiltrados[0] || disenos[0]
+                    if (!primero) return notificar('No hay elementos para editar', 'alerta')
+                    abrirEditarElemento(primero)
+                  }}
+                  className="pro-btn pro-btn-secondary pro-btn-sm"
+                  style={{ fontSize: '11.5px', padding: '6px 11px' }}
+                  title="Seleccionar un elemento para editar o eliminar"
+                >
+                  ✏️ Editar / Eliminar
+                </button>
+              </>
+            )}
+
             <button
               type="button"
               onClick={() => setBarraSuperiorVisible((v) => !v)}
@@ -1119,22 +1233,46 @@ export default function GestionProduccion({
                           )}
                         </div>
 
-                        {/* Pie de tarjeta: PDF + Fecha */}
+                        {/* Pie de tarjeta: PDF + Fecha + Editar/Eliminar */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '6px', borderTop: '1px solid rgba(0,0,0,0.05)' }}>
                           {renderizarControlesPdf(item, true)}
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setModalFechaItem(item)
-                              setFechaTemporal(fechaItem)
-                            }}
-                            className="pro-btn pro-btn-secondary pro-btn-sm pro-mono"
-                            style={{ padding: '3px 7px', fontSize: '11px' }}
-                            title="Programar fecha en calendario"
-                          >
-                            📅 {fechaItem ? fechaItem.slice(5) : '+Fecha'}
-                          </button>
+                          <div style={{ display: 'inline-flex', gap: '4px', alignItems: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setModalFechaItem(item)
+                                setFechaTemporal(fechaItem)
+                              }}
+                              className="pro-btn pro-btn-secondary pro-btn-sm pro-mono"
+                              style={{ padding: '3px 7px', fontSize: '11px' }}
+                              title="Programar fecha en calendario"
+                            >
+                              📅 {fechaItem ? fechaItem.slice(5) : '+Fecha'}
+                            </button>
+                            {puedeEditar && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => abrirEditarElemento(item)}
+                                  className="pro-btn pro-btn-secondary pro-btn-sm"
+                                  style={{ padding: '3px 6px', fontSize: '11px' }}
+                                  title="Editar elemento"
+                                >
+                                  ✏️
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setElementoEliminar(item)}
+                                  className="pro-btn pro-btn-secondary pro-btn-sm"
+                                  style={{ padding: '3px 6px', fontSize: '11px', color: '#dc2626' }}
+                                  title="Eliminar elemento"
+                                >
+                                  🗑️
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
                     )
@@ -1475,6 +1613,203 @@ export default function GestionProduccion({
             />
             <div style={{ marginTop: '6px', fontSize: '12px', fontWeight: 600, color: '#1d1d1f', textAlign: 'center' }}>
               {imagenHover.nombre}
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* MODAL CREAR / EDITAR ELEMENTO */}
+      {modalElementoAbierto &&
+        createPortal(
+          <div className="pro-modal-backdrop" onClick={() => !guardandoCrud && setModalElementoAbierto(false)}>
+            <div className="pro-modal-window" style={{ maxWidth: '480px' }} onClick={(e) => e.stopPropagation()}>
+              <div className="pro-modal-header">
+                <h3 style={{ fontSize: '15px', margin: 0 }}>
+                  {elementoEditando ? `✏️ Editar: ${elementoEditando.Nombre}` : '➕ Nuevo Elemento de Producción'}
+                </h3>
+                <button
+                  type="button"
+                  disabled={guardandoCrud}
+                  onClick={() => setModalElementoAbierto(false)}
+                  className="pro-btn pro-btn-secondary pro-btn-sm"
+                >
+                  ✕
+                </button>
+              </div>
+              <form onSubmit={guardarElementoCrud}>
+                <div className="pro-modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                  {elementoEditando && (
+                    <div style={{ padding: '10px', borderRadius: '10px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                      <label className="pro-label">Elemento seleccionado para editar o eliminar</label>
+                      <select
+                        value={elementoEditando.ID}
+                        onChange={(e) => {
+                          const encontrado = disenos.find((d) => String(d.ID) === String(e.target.value))
+                          if (encontrado) abrirEditarElemento(encontrado)
+                        }}
+                        className="pro-select"
+                      >
+                        {(disenosFiltrados.length > 0 ? disenosFiltrados : disenos).map((d) => (
+                          <option key={d.ID} value={d.ID}>
+                            [{d.TipoNivel}] {d.Nombre} {d.Proyecto ? `— ${d.Proyecto}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  <div>
+                    <label className="pro-label">Nombre de la pieza o ensamble *</label>
+                    <input
+                      type="text"
+                      required
+                      value={nombreForm}
+                      onChange={(e) => setNombreForm(e.target.value)}
+                      placeholder="Ej. Soporte de Torre"
+                      className="pro-input"
+                    />
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <label className="pro-label">Proyecto *</label>
+                      <input
+                        type="text"
+                        required
+                        list="lista-proyectos-prod"
+                        value={proyectoForm}
+                        onChange={(e) => setProyectoForm(e.target.value)}
+                        placeholder="Nombre del proyecto"
+                        className="pro-input"
+                      />
+                      <datalist id="lista-proyectos-prod">
+                        {proyectosUnicos.map((p, idx) => (
+                          <option key={idx} value={p} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div>
+                      <label className="pro-label">Nivel</label>
+                      <select value={tipoNivelForm} onChange={(e) => setTipoNivelForm(e.target.value)} className="pro-select">
+                        <option value="Pieza">Pieza</option>
+                        <option value="Subensamble">Subensamble</option>
+                        <option value="Ensamble">Ensamble</option>
+                        <option value="Tarea">Tarea</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="pro-label">Pertenece a (Ensamble Padre opcional)</label>
+                    <select value={padreIDForm} onChange={(e) => setPadreIDForm(e.target.value)} className="pro-select">
+                      <option value="">-- Ninguno (Nivel raíz) --</option>
+                      {disenos
+                        .filter((d) => !elementoEditando || d.ID !== elementoEditando.ID)
+                        .map((d) => (
+                          <option key={d.ID} value={d.ID}>
+                            [{d.TipoNivel}] {d.Nombre} ({d.Proyecto})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <div>
+                      <label className="pro-label">Cantidad unitaria</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={cantidadReqForm}
+                        onChange={(e) => setCantidadReqForm(e.target.value)}
+                        className="pro-input pro-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="pro-label">Piezas listas</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={cantidadListaForm}
+                        onChange={(e) => setCantidadListaForm(e.target.value)}
+                        className="pro-input pro-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div className="pro-modal-footer" style={{ justifyContent: 'space-between' }}>
+                  <div>
+                    {elementoEditando && (
+                      <button
+                        type="button"
+                        disabled={guardandoCrud}
+                        onClick={() => {
+                          const target = elementoEditando
+                          setModalElementoAbierto(false)
+                          setElementoEliminar(target)
+                        }}
+                        className="pro-btn pro-btn-secondary"
+                        style={{ color: '#dc2626', borderColor: '#fecaca', backgroundColor: '#fef2f2' }}
+                      >
+                        🗑️ Eliminar
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    <button
+                      type="button"
+                      disabled={guardandoCrud}
+                      onClick={() => setModalElementoAbierto(false)}
+                      className="pro-btn pro-btn-secondary"
+                    >
+                      Cancelar
+                    </button>
+                    <button type="submit" disabled={guardandoCrud} className="pro-btn pro-btn-primary">
+                      {guardandoCrud ? 'Guardando...' : elementoEditando ? 'Guardar cambios' : 'Agregar elemento'}
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </div>,
+          document.body
+        )}
+
+      {/* MODAL CONFIRMAR ELIMINACIÓN */}
+      {elementoEliminar &&
+        createPortal(
+          <div className="pro-modal-backdrop" onClick={() => !guardandoCrud && setElementoEliminar(null)}>
+            <div className="pro-modal-window" style={{ maxWidth: '400px' }} onClick={(e) => e.stopPropagation()}>
+              <div className="pro-modal-header">
+                <h3 style={{ fontSize: '15px', margin: 0, color: '#dc2626' }}>🗑️ Eliminar elemento</h3>
+                <button
+                  type="button"
+                  disabled={guardandoCrud}
+                  onClick={() => setElementoEliminar(null)}
+                  className="pro-btn pro-btn-secondary pro-btn-sm"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="pro-modal-body">
+                <p style={{ margin: 0, fontSize: '13.5px', color: '#1d1d1f' }}>
+                  ¿Seguro que deseas eliminar <strong>{elementoEliminar.Nombre}</strong>? Esta acción no se puede deshacer.
+                </p>
+              </div>
+              <div className="pro-modal-footer">
+                <button
+                  type="button"
+                  disabled={guardandoCrud}
+                  onClick={() => setElementoEliminar(null)}
+                  className="pro-btn pro-btn-secondary"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={guardandoCrud}
+                  onClick={confirmarEliminarElemento}
+                  className="pro-btn pro-btn-primary"
+                  style={{ backgroundColor: '#dc2626', borderColor: '#dc2626' }}
+                >
+                  {guardandoCrud ? 'Eliminando...' : 'Sí, eliminar'}
+                </button>
+              </div>
             </div>
           </div>,
           document.body
